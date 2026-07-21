@@ -15,8 +15,10 @@ class Controller :
         self._baudrate = baudrate if baudrate else int(os.getenv("BAUDRATE"))
         self._protocol_version = protocol_version if protocol_version else float(os.getenv("PROTOCOL_VERSION"))
         
-        self.port_handler = PortHandler(self._device_name)
+        self.port_handler = None  # set before any open attempt so __del__/close is always safe
         self.packet_handler = PacketHandler(self._protocol_version)
+
+        self.port_handler = PortHandler(self._device_name)
 
         if self.port_handler.openPort() :
             print("[CONTROLLER] Succeeded to open the port")
@@ -27,36 +29,84 @@ class Controller :
             print("[CONTROLLER] Succeeded to set the baudrate")
         else :
             raise Exception("[CONTROLLER] Failed to set the baudrate")
-        
+
         time.sleep(0.1)  # Wait for the port to stabilize after opening and setting baudrate
 
+    def close(self) :
+        # Idempotent, exception-safe port teardown. Safe to call even if init failed partway.
+        if getattr(self, "port_handler", None) is not None :
+            try :
+                self.port_handler.closePort()
+                print("[CONTROLLER] Succeeded to close the port")
+            except Exception as e :
+                print(f"[CONTROLLER] Error while closing the port: {e}")
+            finally :
+                self.port_handler = None
+
     def __del__(self) :
-        self.port_handler.closePort()
-        print("[CONTROLLER] Succeeded to close the port")
+        self.close()
+
+    # Support `with Controller() as c:` for deterministic cleanup instead of relying on GC.
+    def __enter__(self) :
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback) :
+        self.close()
+        return False
         
         
+    def _check_comm(self, id: int, action: str, comm_result: int, error: int) -> bool :
+        # Returns True on success. On failure, logs a warning and returns False
+        # instead of raising, so a single dropped packet never kills the run.
+        ok = True
+        if comm_result != COMM_SUCCESS :
+            print(f"[CONTROLLER] Actuator ID {id} [{action}] comm error: "
+                  f"{self.packet_handler.getTxRxResult(comm_result)}")
+            ok = False
+        if error != 0 :
+            print(f"[CONTROLLER] Actuator ID {id} [{action}] hardware error: "
+                  f"{self.packet_handler.getRxPacketError(error)}")
+            ok = False
+        return ok
+
     # input is percentage, 0 to 100
-    def set_speed(self, id: int, speed: float, control_table: ActuatorControlTable) :
+    def set_speed(self, id: int, speed: float, control_table: ActuatorControlTable) -> bool :
         if speed < 0 or speed > 100 :
             raise ValueError("[CONTROLLER] Speed must be between 0 and 100")
-        speed_value = int(speed / 100 * control_table.Unit_Number)  # Convert percentage to
-        return self.packet_handler.write2ByteTxRx(self.port_handler, id, control_table.Address.Moving_Speed, speed_value)
-        
-        
+        speed_value = int(speed / 100 * control_table.Unit_Number)  # Convert percentage to unit value
+        try :
+            comm_result, error = self.packet_handler.write2ByteTxRx(
+                self.port_handler, id, control_table.Address.Moving_Speed, speed_value)
+        except Exception as e :
+            print(f"[CONTROLLER] Actuator ID {id} [SET SPEED] exception: {e}")
+            return False
+        return self._check_comm(id, "SET SPEED", comm_result, error)
+
     # input is degrees, 0 to 300, maximum range for AX-18A is 0 to 300 degrees
-    def set_goal_position(self, id: int, position: float, control_table: ActuatorControlTable) :
+    def set_goal_position(self, id: int, position: float, control_table: ActuatorControlTable) -> bool :
         if position < 0 or position > 300 :
             raise ValueError("[CONTROLLER] Position must be between 0 and 300")
         position_value = int(position / 360 * control_table.Unit_Number)  # Convert degrees to unit value
-        return self.packet_handler.write2ByteTxRx(self.port_handler, id, control_table.Address.Goal_Position, position_value)
-        
-        
+        try :
+            comm_result, error = self.packet_handler.write2ByteTxRx(
+                self.port_handler, id, control_table.Address.Goal_Position, position_value)
+        except Exception as e :
+            print(f"[CONTROLLER] Actuator ID {id} [SET POSITION] exception: {e}")
+            return False
+        return self._check_comm(id, "SET POSITION", comm_result, error)
+
     # output is degrees, 0 to 300, maximum range for AX-18A is 0 to 300 degrees
+    # Returns position in degrees, or None if the read failed (caller must handle None).
     def get_present_position(self, id: int, control_table: ActuatorControlTable) :
-        result, error, _ = self.packet_handler.read2ByteTxRx(self.port_handler, id, control_table.Address.Present_Position)
-        if error != 0:
-            raise Exception(f"[CONTROLLER] Error reading present position: {error}")
-        position_degrees = result / control_table.Unit_Number * 360  # Convert unit value to degrees
+        try :
+            data, comm_result, error = self.packet_handler.read2ByteTxRx(
+                self.port_handler, id, control_table.Address.Present_Position)
+        except Exception as e :
+            print(f"[CONTROLLER] Actuator ID {id} [GET POSITION] exception: {e}")
+            return None
+        if not self._check_comm(id, "GET POSITION", comm_result, error) :
+            return None
+        position_degrees = data / control_table.Unit_Number * 360  # Convert unit value to degrees
         return position_degrees
 
     # def set_mode(self, id: int, mode: int) :
