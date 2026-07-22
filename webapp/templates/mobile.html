@@ -1,0 +1,175 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>desky mobile camera</title>
+  <style>
+    body { font-family: system-ui, sans-serif; max-width: 480px; margin: 1rem auto; padding: 0 1rem; color: #222; }
+    h1 { font-size: 1.2rem; }
+    video { width: 100%; border-radius: 8px; background: #000; }
+    button { padding: 0.6rem 1.2rem; font-size: 1rem; margin-top: 0.75rem; cursor: pointer; }
+    #status { font-family: monospace; white-space: pre-wrap; margin-top: 0.75rem; }
+    .error { color: #b00020; }
+    .ok { color: #1a7a1a; }
+    section { border: 1px solid #ddd; border-radius: 8px; padding: 1rem; margin-top: 1.5rem; }
+    section h2 { margin-top: 0; font-size: 1.1rem; }
+    textarea { width: 100%; box-sizing: border-box; padding: 0.5rem; font-family: inherit; resize: vertical; }
+    select { padding: 0.4rem; margin-top: 0.5rem; }
+    #ask-result { font-family: monospace; white-space: pre-wrap; margin-top: 0.75rem; }
+    .banner { padding: 0.75rem 1rem; border-radius: 8px; margin-top: 0.75rem; background: #fff3cd; color: #7a5b00; border: 1px solid #f0d999; }
+  </style>
+</head>
+<body>
+  <h1>desky mobile camera</h1>
+  <video id="preview" autoplay playsinline muted></video>
+  <div>
+    <button id="start-btn">Start camera + streaming</button>
+  </div>
+  <div id="status">idle</div>
+
+  <canvas id="capture" style="display:none"></canvas>
+
+  <section>
+    <h2>Ask Gemini</h2>
+    {% if not gemini_configured %}
+    <div class="banner">
+      ⚠ Gemini not configured{% if gemini_error %} — {{ gemini_error }}{% endif %}.
+    </div>
+    {% endif %}
+    <textarea id="ask-text" rows="3" placeholder="Type a message or paste text to summarize..." {{ "disabled" if not gemini_configured }}></textarea>
+    <div>
+      <select id="ask-mode" {{ "disabled" if not gemini_configured }}>
+        <option value="chat">Chat</option>
+        <option value="summary">Summarize</option>
+      </select>
+      <button id="ask-btn" {{ "disabled" if not gemini_configured }}>Ask</button>
+    </div>
+    <div id="ask-result"></div>
+  </section>
+
+  <script>
+    const FRAME_INTERVAL_MS = 200; // ~5 fps, kept low for bandwidth
+    const JPEG_QUALITY = 0.6;
+
+    const video = document.getElementById("preview");
+    const canvas = document.getElementById("capture");
+    const statusEl = document.getElementById("status");
+    const startBtn = document.getElementById("start-btn");
+
+    let ws = null;
+    let captureTimer = null;
+    let framesSent = 0;
+
+    function setStatus(text, className = "") {
+      statusEl.textContent = text;
+      statusEl.className = className;
+    }
+
+    function connectSocket() {
+      const proto = location.protocol === "https:" ? "wss:" : "ws:";
+      ws = new WebSocket(`${proto}//${location.host}/ws/camera`);
+      ws.binaryType = "arraybuffer";
+
+      ws.onopen = () => setStatus("camera + mic granted, connected, streaming...", "ok");
+      ws.onclose = () => {
+        setStatus("disconnected from server", "error");
+        stopCapture();
+      };
+      ws.onerror = () => setStatus("websocket error", "error");
+    }
+
+    function captureLoop() {
+      if (!video.videoWidth) return; // video metadata not ready yet
+      if (canvas.width !== video.videoWidth) {
+        canvas.width = video.videoWidth;
+        canvas.height = video.videoHeight;
+      }
+      const ctx = canvas.getContext("2d");
+      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+      canvas.toBlob(
+        (blob) => {
+          if (blob && ws && ws.readyState === WebSocket.OPEN) {
+            ws.send(blob);
+            framesSent += 1;
+            setStatus(`streaming... ${framesSent} frames sent`, "ok");
+          }
+        },
+        "image/jpeg",
+        JPEG_QUALITY
+      );
+    }
+
+    function stopCapture() {
+      if (captureTimer) {
+        clearInterval(captureTimer);
+        captureTimer = null;
+      }
+    }
+
+    async function start() {
+      if (!window.isSecureContext || !navigator.mediaDevices) {
+        setStatus(
+          "Camera access needs HTTPS. Open this page as https://<server-ip>:8000/mobile " +
+            "(accept the self-signed certificate warning).",
+          "error"
+        );
+        return;
+      }
+      startBtn.disabled = true;
+      setStatus("requesting camera + microphone permission...");
+      try {
+        // Both video and audio are requested together so the browser's
+        // permission prompt covers the microphone too. Only video frames are
+        // streamed to the server in this demo — the audio track is captured
+        // (permission granted, track exists) but not transmitted.
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: "environment" },
+          audio: true,
+        });
+        video.srcObject = stream;
+        connectSocket();
+        captureTimer = setInterval(captureLoop, FRAME_INTERVAL_MS);
+      } catch (e) {
+        setStatus("permission denied or camera unavailable: " + e, "error");
+        startBtn.disabled = false;
+      }
+    }
+
+    startBtn.addEventListener("click", start);
+
+    async function ask() {
+      const text = document.getElementById("ask-text").value;
+      const mode = document.getElementById("ask-mode").value;
+      const el = document.getElementById("ask-result");
+      if (!text) {
+        el.textContent = "type something first";
+        el.className = "error";
+        return;
+      }
+      el.textContent = "asking...";
+      el.className = "";
+      try {
+        const res = await fetch("/api/ask", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ text, mode }),
+        });
+        const data = await res.json();
+        if (!res.ok || data.error) {
+          el.textContent = "error: " + (data.error || res.status);
+          el.className = "error";
+        } else {
+          el.textContent = data.answer;
+          el.className = "";
+        }
+      } catch (e) {
+        el.textContent = "request failed: " + e;
+        el.className = "error";
+      }
+    }
+
+    document.getElementById("ask-btn").addEventListener("click", ask);
+  </script>
+</body>
+</html>

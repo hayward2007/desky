@@ -15,10 +15,18 @@
     .joint-row label { width: 4rem; }
     #status, #position-result, #joint-result { font-family: monospace; white-space: pre-wrap; margin-top: 0.75rem; }
     .error { color: #b00020; }
+    .banner { padding: 0.75rem 1rem; border-radius: 8px; margin-bottom: 1.5rem; background: #fff3cd; color: #7a5b00; border: 1px solid #f0d999; }
   </style>
 </head>
 <body>
   <h1>desky arm control</h1>
+
+  {% if not hardware_connected %}
+  <div class="banner">
+    ⚠ No hardware connected{% if hardware_error %} — {{ hardware_error }}{% endif %}.
+    Controls below are disabled.
+  </div>
+  {% endif %}
 
   <section>
     <h2>Current position (FK read-back)</h2>
@@ -28,10 +36,10 @@
   <section>
     <h2>Move to position (IK)</h2>
     <div class="joint-row">
-      <label for="x">x (m)</label><input type="number" id="x" step="0.001" value="0.2">
-      <label for="y">y (m)</label><input type="number" id="y" step="0.001" value="0">
-      <label for="z">z (m)</label><input type="number" id="z" step="0.001" value="0.1">
-      <button onclick="gotoPosition()">Move</button>
+      <label for="x">x (m)</label><input type="number" id="x" step="0.001" value="0.2" {{ "disabled" if not hardware_connected }}>
+      <label for="y">y (m)</label><input type="number" id="y" step="0.001" value="0" {{ "disabled" if not hardware_connected }}>
+      <label for="z">z (m)</label><input type="number" id="z" step="0.001" value="0.1" {{ "disabled" if not hardware_connected }}>
+      <button onclick="gotoPosition()" {{ "disabled" if not hardware_connected }}>Move</button>
     </div>
     <div id="position-result"></div>
   </section>
@@ -41,11 +49,18 @@
     {% for joint_id in joint_ids %}
     <div class="joint-row">
       <label for="joint-{{ joint_id }}">id {{ joint_id }}</label>
-      <input type="number" id="joint-{{ joint_id }}" min="0" max="300" step="1" value="150">
-      <button onclick="gotoJoint({{ joint_id }})">Go</button>
+      <input type="number" id="joint-{{ joint_id }}" min="0" max="300" step="1" value="150" {{ "disabled" if not hardware_connected }}>
+      <button onclick="gotoJoint({{ joint_id }})" {{ "disabled" if not hardware_connected }}>Go</button>
     </div>
     {% endfor %}
     <div id="joint-result"></div>
+  </section>
+
+  <section>
+    <h2>Mobile camera feed</h2>
+    <p>Open <code>/mobile</code> on the phone mounted on the arm to start streaming.</p>
+    <img id="camera-feed" alt="waiting for camera frames..." style="width: 100%; border-radius: 8px; background: #eee; display: block;">
+    <div id="camera-status">no frames received yet</div>
   </section>
 
   <script>
@@ -54,10 +69,16 @@
       try {
         const res = await fetch("/api/status");
         const data = await res.json();
-        el.textContent = data.position
-          ? `x=${data.position[0].toFixed(4)} y=${data.position[1].toFixed(4)} z=${data.position[2].toFixed(4)}`
-          : "unavailable (an actuator failed to report its position)";
-        el.className = data.position ? "" : "error";
+        if (!data.connected) {
+          el.textContent = "no hardware connected" + (data.error ? " — " + data.error : "");
+          el.className = "error";
+        } else if (data.position) {
+          el.textContent = `x=${data.position[0].toFixed(4)} y=${data.position[1].toFixed(4)} z=${data.position[2].toFixed(4)}`;
+          el.className = "";
+        } else {
+          el.textContent = "unavailable (an actuator failed to report its position)";
+          el.className = "error";
+        }
       } catch (e) {
         el.textContent = "status request failed: " + e;
         el.className = "error";
@@ -107,8 +128,30 @@
       }
     }
 
+    async function refreshCamera() {
+      const img = document.getElementById("camera-feed");
+      const el = document.getElementById("camera-status");
+      try {
+        const res = await fetch("/api/camera/status");
+        const data = await res.json();
+        if (!data.streaming) {
+          el.textContent = "no frames received yet — open /mobile on the phone";
+          el.className = "error";
+          return;
+        }
+        el.textContent = `receiving — ${data.frame_count} frames, ${data.clients} client(s), last frame ${data.age_seconds.toFixed(1)}s ago`;
+        el.className = "";
+        img.src = "/api/camera/latest.jpg?t=" + Date.now();
+      } catch (e) {
+        el.textContent = "camera status request failed: " + e;
+        el.className = "error";
+      }
+    }
+
     refreshStatus();
     setInterval(refreshStatus, 1500);
+    refreshCamera();
+    setInterval(refreshCamera, 500);
   </script>
 </body>
 </html>

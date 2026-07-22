@@ -1,42 +1,208 @@
 """Flask control dashboard for the desky arm.
 
 Enter a target (x, y, z) position or a per-joint servo degree in the browser
-and drive the real actuators through hardware.util.ArmController. Requires
-actual hardware — Controller() opens a serial port on import, same as
-main.py — and a configured .env (see README.md).
+and drive the real actuators through hardware.util.ArmController. If no
+hardware is connected — no serial device, missing/misconfigured .env, or even
+the dynamixel_sdk/python-dotenv packages not installed — the dashboard still
+starts. It just reports "no hardware connected" instead of controlling
+anything.
+
+Also serves /mobile: a page meant to be opened on the phone mounted on the
+arm's end-effector. It asks for camera+microphone permission and streams JPEG
+camera frames to the server over a WebSocket (/ws/camera). The main dashboard
+(/) polls the latest frame back over HTTP to preview it.
+
+Also exposes /api/ask: a Gemini-backed chat/summary endpoint. If GEMINI_API_KEY
+isn't set (or the google-genai package isn't installed), that route reports
+"not configured" instead of crashing the app, same as the hardware fallback.
 
 Run from the repository root:
-    python3 -m webapp.app
+    python -m webapp.app
 """
 
-from flask import Flask, jsonify, render_template, request
+import os
+import numpy as np
+import threading
+import time
+import cv2
 
-from hardware.controller import Controller
-from hardware.util import Actuator, ArmController
+from flask import Flask, Response, jsonify, render_template, request
+from flask_sock import Sock
+
+from kinematics.urdf_loader import load_arm
 from logger import Logger
+
+try:
+    # Optional: only needed to read GEMINI_API_KEY (and hardware's .env vars)
+    # from a .env file. Without it, those must already be real env vars.
+    from dotenv import load_dotenv
+
+    load_dotenv()
+except ImportError:
+    pass
 
 Logger.enabled = True
 
 app = Flask(__name__)
+sock = Sock(app)
 
-controller = Controller()
-actuators = [Actuator(id=i, model="AX-18A", controller=controller) for i in range(1, 6)]
-arm_ctrl = ArmController(actuators)
+arm_ctrl = None
+hardware_error = None
+try:
+    # Imported inside the try block: hardware.controller imports dynamixel_sdk
+    # at module load time, so even that missing package must count as "no
+    # hardware connected" rather than crashing the whole app.
+    from hardware.controller import Controller
+    from hardware.util import Actuator, ArmController
+
+    controller = Controller()
+    actuators = [Actuator(id=i, model="AX-18A", controller=controller) for i in range(1, 6)]
+    arm_ctrl = ArmController(actuators)
+    Logger.log("WEBAPP", "Hardware connected")
+except Exception as e:
+    hardware_error = str(e)
+    Logger.log("WEBAPP", f"No hardware connected: {hardware_error}")
+
+# Joint list is needed to render the per-joint controls even with no hardware.
+arm = arm_ctrl.arm if arm_ctrl is not None else load_arm()
+
+GEMINI_MODEL = "gemini-flash-latest"  # fast, generous free tier
+GEMINI_CHAT_INSTRUCTION = "너는 친절한 한국어 AI 비서야. 자연스럽게 대화해줘."
+GEMINI_SUMMARY_INSTRUCTION = "너는 문서를 간결하게 요약해주는 비서야. 핵심만 한국어로 정리해줘."
+
+gemini_client = None
+gemini_error = None
+try:
+    from google import genai
+    from google.genai import types as genai_types
+
+    gemini_client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
+    Logger.log("GEMINI", f"Gemini client configured (model={GEMINI_MODEL})")
+except Exception as e:
+    gemini_error = str(e)
+    Logger.log("GEMINI", f"Gemini not configured: {gemini_error}")
+
+# Latest JPEG frame received from the phone's camera over /ws/camera, plus a
+# few counters for the dashboard's status display. Guarded by camera_lock
+# since the WebSocket handler runs on its own request thread.
+camera_lock = threading.Lock()
+camera_state = {"frame": None, "frame_time": None, "frame_count": 0, "clients": 0}
 
 
 @app.route("/")
 def index():
-    return render_template("index.html", joint_ids=[joint.id for joint in arm_ctrl.arm.joints])
+    return render_template(
+        "index.html",
+        joint_ids=[joint.id for joint in arm.joints],
+        hardware_connected=arm_ctrl is not None,
+        hardware_error=hardware_error,
+    )
 
+@app.route("/mobile")
+def mobile():
+    return render_template(
+        "mobile.html",
+        joint_ids=[joint.id for joint in arm.joints],
+        hardware_connected=arm_ctrl is not None,
+        hardware_error=hardware_error,
+        gemini_configured=gemini_client is not None,
+        gemini_error=gemini_error,
+    )
 
 @app.route("/api/status")
 def status():
-    position = arm_ctrl.get_position()
-    return jsonify({"position": position})
+    if arm_ctrl is None:
+        return jsonify({"connected": False, "position": None, "error": hardware_error})
+    return jsonify({"connected": True, "position": arm_ctrl.get_position()})
+
+
+@app.route("/api/ask", methods=["POST"])
+def ask():
+    if gemini_client is None:
+        return jsonify({"error": f"Gemini not configured: {gemini_error}"}), 503
+
+    data = request.get_json(force=True)
+    text = data.get("text") if data else None
+    mode = data.get("mode", "chat") if data else "chat"
+    if not text:
+        return jsonify({"error": "text is required"}), 400
+
+    system = GEMINI_SUMMARY_INSTRUCTION if mode == "summary" else GEMINI_CHAT_INSTRUCTION
+
+    Logger.log("GEMINI", f"ask request: mode={mode}, text length={len(text)}")
+    try:
+        response = gemini_client.models.generate_content(
+            model=GEMINI_MODEL,
+            contents=text,
+            config=genai_types.GenerateContentConfig(
+                system_instruction=system,
+                max_output_tokens=1024,
+            ),
+        )
+        return jsonify({"answer": response.text})
+    except Exception as e:
+        Logger.log("GEMINI", f"ask failed: {e}")
+        return jsonify({"error": str(e)}), 502
+
+
+@sock.route("/ws/camera")
+def ws_camera(ws):
+    """Receives JPEG camera frames streamed from /mobile.
+
+    Each incoming binary message is one complete JPEG frame (see mobile.html —
+    it snapshots the phone's camera onto a canvas and sends canvas.toBlob()
+    output directly, so there's no video container/codec to reassemble here).
+    """
+    with camera_lock:
+        camera_state["clients"] += 1
+    Logger.log("CAMERA", "Mobile client connected")
+    try:
+        while True:
+            data = ws.receive()
+            if data is None:
+                break
+            if not isinstance(data, (bytes, bytearray)):
+                continue
+            with camera_lock:
+                camera_state["frame"] = bytes(data)
+                camera_state["frame_time"] = time.time()
+                camera_state["frame_count"] += 1
+                
+            
+    finally:
+        with camera_lock:
+            camera_state["clients"] -= 1
+        Logger.log("CAMERA", "Mobile client disconnected")
+
+
+@app.route("/api/camera/latest.jpg")
+def camera_latest_frame():
+    with camera_lock:
+        frame = camera_state["frame"]
+    if frame is None:
+        return jsonify({"error": "no camera frame received yet"}), 404
+    return Response(frame, mimetype="image/jpeg")
+
+
+@app.route("/api/camera/status")
+def camera_status():
+    with camera_lock:
+        frame_time = camera_state["frame_time"]
+        frame_count = camera_state["frame_count"]
+        clients = camera_state["clients"]
+    return jsonify({
+        "streaming": frame_time is not None,
+        "clients": clients,
+        "frame_count": frame_count,
+        "age_seconds": (time.time() - frame_time) if frame_time is not None else None,
+    })
 
 
 @app.route("/api/goto_position", methods=["POST"])
 def goto_position():
+    if arm_ctrl is None:
+        return jsonify({"error": "no hardware connected"}), 503
+
     data = request.get_json(force=True)
     try:
         target = (float(data["x"]), float(data["y"]), float(data["z"]))
@@ -51,6 +217,9 @@ def goto_position():
 
 @app.route("/api/goto_joint", methods=["POST"])
 def goto_joint():
+    if arm_ctrl is None:
+        return jsonify({"error": "no hardware connected"}), 503
+
     data = request.get_json(force=True)
     try:
         joint_id = int(data["id"])
@@ -70,7 +239,58 @@ def goto_joint():
     return jsonify({"ok": True})
 
 
+def run():
+    """Serve the dashboard and show a local preview window of the phone's
+    camera feed. Shared by `python -m webapp.app` and `python main.py` so
+    both behave identically.
+
+    debug=False: the Flask reloader re-imports this module in a subprocess,
+    which would open the serial port twice.
+    threaded=True: the /ws/camera WebSocket connection stays open for the
+    whole mobile session, so the dev server needs a thread per request to
+    keep serving the dashboard's HTTP polling at the same time.
+    ssl_context="adhoc": getUserMedia (camera/mic) only works in a secure
+    context. A phone loading /mobile over the LAN IP needs HTTPS — a
+    self-signed cert is generated on the fly (pyOpenSSL). The browser will
+    show an untrusted-certificate warning once; accept it to proceed.
+
+    app.run() blocks forever, so it runs on a background thread here —
+    otherwise the cv2.imshow loop below would never execute. cv2's window
+    calls stay on the main thread since OpenCV's HighGUI requires that on
+    macOS (imshow/waitKey from a non-main thread silently do nothing there).
+    """
+    server_thread = threading.Thread(
+        target=lambda: app.run(host="0.0.0.0", port=8000, debug=False, threaded=True, ssl_context="adhoc"),
+        daemon=True,
+    )
+    server_thread.start()
+
+    Logger.log("CAMERA", "Press 'q' in the camera window (or Ctrl+C here) to quit")
+    last_frame_count = 0
+    try:
+        while True:
+            with camera_lock:
+                frame_bytes = camera_state["frame"]
+                frame_count = camera_state["frame_count"]
+            # Only decode+show on a genuinely new frame — the phone only
+            # sends ~5 fps, but this loop spins far faster (waitKey(1) is a
+            # ~1ms cap, not a guarantee), so without this check it would
+            # needlessly re-decode and re-display the same bytes every spin.
+            if frame_bytes is not None and frame_count != last_frame_count:
+                last_frame_count = frame_count
+                frame = cv2.imdecode(np.frombuffer(frame_bytes, np.uint8), cv2.IMREAD_COLOR)
+                if frame is not None:
+                    cv2.imshow("Mobile camera", frame)
+            # waitKey both drives HighGUI's event loop (without it the window
+            # never actually renders/refreshes) and lets 'q'/Esc quit.
+            key = cv2.waitKey(1) & 0xFF
+            if key == ord("q") or key == 27:
+                break
+    except KeyboardInterrupt:
+        pass
+    finally:
+        cv2.destroyAllWindows()
+
+
 if __name__ == "__main__":
-    # debug=False: the Flask reloader re-imports this module in a subprocess,
-    # which would open the serial port twice.
-    app.run(host="0.0.0.0", port=5000, debug=False)
+    run()
