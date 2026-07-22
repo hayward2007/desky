@@ -24,6 +24,8 @@ you have the real numbers. FK/IK adapt automatically to whatever you set.
 
 import math
 
+from logger import Logger
+
 # ---------------------------------------------------------------------------
 # Link geometry — PLACEHOLDERS. Replace with measured values (any consistent
 # length unit; mm assumed). Each offset is the translation from the previous
@@ -314,15 +316,15 @@ if __name__ == "__main__":
     arm = Arm()
 
     q0 = [0.0, 0.0, 0.0, 0.0, 0.0]
-    print("FK at home pose:", tuple(round(v, 2) for v in arm.fk(q0)))
+    Logger.log("KINEMATICS", f"FK at home pose: {tuple(round(v, 2) for v in arm.fk(q0))}")
 
     # Round-trip: pick a reachable target from a known pose, then solve IK back.
     q_true = [0.3, 0.2, -0.4, 0.5, 0.1]
     target = arm.fk(q_true)
-    print("Target position:", tuple(round(v, 2) for v in target))
+    Logger.log("KINEMATICS", f"Target position: {tuple(round(v, 2) for v in target)}")
 
     q_sol, ok = arm.ik(target, seed=[0.0] * 5)
     reached = arm.fk(q_sol)
-    print("IK converged:", ok)
-    print("Reached position:", tuple(round(v, 2) for v in reached))
-    print("Servo commands (deg):", [round(d, 1) for d in arm.q_to_servo_deg(q_sol)])
+    Logger.log("KINEMATICS", f"IK converged: {ok}")
+    Logger.log("KINEMATICS", f"Reached position: {tuple(round(v, 2) for v in reached)}")
+    Logger.log("KINEMATICS", f"Servo commands (deg): {[round(d, 1) for d in arm.q_to_servo_deg(q_sol)]}")

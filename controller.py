@@ -1,6 +1,7 @@
 from dynamixel_sdk import *
 from control_table import *
 from dotenv import load_dotenv
+from logger import Logger
 import os
 import time
 
@@ -8,7 +9,7 @@ import time
 
 class Controller :
     def __init__(self, device_name: str = None, baudrate: int = None, protocol_version: float = None) :
-        print("[CONTROLLER] Initializing...")
+        Logger.log("CONTROLLER", "Initializing...")
         load_dotenv()
         
         self._device_name = device_name if device_name else '/dev/' + os.getenv("DEVICE_NAME")
@@ -21,12 +22,12 @@ class Controller :
         self.port_handler = PortHandler(self._device_name)
 
         if self.port_handler.openPort() :
-            print("[CONTROLLER] Succeeded to open the port")
+            Logger.log("CONTROLLER", "Succeeded to open the port")
         else :
             raise Exception("[CONTROLLER] Failed to open the port")
 
         if self.port_handler.setBaudRate(self._baudrate) :
-            print("[CONTROLLER] Succeeded to set the baudrate")
+            Logger.log("CONTROLLER", "Succeeded to set the baudrate")
         else :
             raise Exception("[CONTROLLER] Failed to set the baudrate")
 
@@ -37,9 +38,9 @@ class Controller :
         if getattr(self, "port_handler", None) is not None :
             try :
                 self.port_handler.closePort()
-                print("[CONTROLLER] Succeeded to close the port")
+                Logger.log("CONTROLLER", "Succeeded to close the port")
             except Exception as e :
-                print(f"[CONTROLLER] Error while closing the port: {e}")
+                Logger.log("CONTROLLER", f"Error while closing the port: {e}")
             finally :
                 self.port_handler = None
 
@@ -60,12 +61,12 @@ class Controller :
         # instead of raising, so a single dropped packet never kills the run.
         ok = True
         if comm_result != COMM_SUCCESS :
-            print(f"[CONTROLLER] Actuator ID {id} [{action}] comm error: "
-                  f"{self.packet_handler.getTxRxResult(comm_result)}")
+            Logger.log("CONTROLLER", f"Actuator ID {id} [{action}] comm error: "
+                       f"{self.packet_handler.getTxRxResult(comm_result)}")
             ok = False
         if error != 0 :
-            print(f"[CONTROLLER] Actuator ID {id} [{action}] hardware error: "
-                  f"{self.packet_handler.getRxPacketError(error)}")
+            Logger.log("CONTROLLER", f"Actuator ID {id} [{action}] hardware error: "
+                       f"{self.packet_handler.getRxPacketError(error)}")
             ok = False
         return ok
 
@@ -78,7 +79,7 @@ class Controller :
             comm_result, error = self.packet_handler.write2ByteTxRx(
                 self.port_handler, id, control_table.Address.Moving_Speed, speed_value)
         except Exception as e :
-            print(f"[CONTROLLER] Actuator ID {id} [SET SPEED] exception: {e}")
+            Logger.log("CONTROLLER", f"Actuator ID {id} [SET SPEED] exception: {e}")
             return False
         return self._check_comm(id, "SET SPEED", comm_result, error)
 
@@ -91,7 +92,7 @@ class Controller :
             comm_result, error = self.packet_handler.write2ByteTxRx(
                 self.port_handler, id, control_table.Address.Goal_Position, position_value)
         except Exception as e :
-            print(f"[CONTROLLER] Actuator ID {id} [SET POSITION] exception: {e}")
+            Logger.log("CONTROLLER", f"Actuator ID {id} [SET POSITION] exception: {e}")
             return False
         return self._check_comm(id, "SET POSITION", comm_result, error)
 
@@ -102,7 +103,7 @@ class Controller :
             data, comm_result, error = self.packet_handler.read2ByteTxRx(
                 self.port_handler, id, control_table.Address.Present_Position)
         except Exception as e :
-            print(f"[CONTROLLER] Actuator ID {id} [GET POSITION] exception: {e}")
+            Logger.log("CONTROLLER", f"Actuator ID {id} [GET POSITION] exception: {e}")
             return None
         if not self._check_comm(id, "GET POSITION", comm_result, error) :
             return None

@@ -12,6 +12,7 @@ import math
 import xml.etree.ElementTree as ET
 
 from kinematics import Arm, Joint, _matmul, _translate, _rpy
+from logger import Logger
 
 
 def _parse_triplet(text, default=(0.0, 0.0, 0.0)):
@@ -111,19 +112,19 @@ def load_arm(path="desky.urdf"):
 
 if __name__ == "__main__":
     arm = load_arm("desky.urdf")
-    print("Loaded joints from URDF:")
+    Logger.log("URDF", "Loaded joints from URDF:")
     for j in arm.joints:
-        print(f"  {j.name}: id={j.id} axis={j.axis} offset={j.offset} "
-              f"limits=({round(j.q_min, 3)}, {round(j.q_max, 3)})")
-    print("Tool offset:", arm.tool_offset)
+        Logger.log("URDF", f"  {j.name}: id={j.id} axis={j.axis} offset={j.offset} "
+                   f"limits=({round(j.q_min, 3)}, {round(j.q_max, 3)})")
+    Logger.log("URDF", f"Tool offset: {arm.tool_offset}")
 
     q0 = [0.0] * len(arm.joints)
-    print("FK at home pose:", tuple(round(v, 4) for v in arm.fk(q0)))
+    Logger.log("URDF", f"FK at home pose: {tuple(round(v, 4) for v in arm.fk(q0))}")
 
     q_true = [0.3, 0.2, -0.4, 0.5, 0.1]
     target = arm.fk(q_true)
     q_sol, ok = arm.ik(target, seed=[0.0] * len(arm.joints))
     reached = arm.fk(q_sol)
     err = math.sqrt(sum((a - b) ** 2 for a, b in zip(target, reached)))
-    print(f"IK round-trip converged={ok}, position error={err:.6f} m")
-    print("Servo commands (deg):", [round(d, 1) for d in arm.q_to_servo_deg(q_sol)])
+    Logger.log("URDF", f"IK round-trip converged={ok}, position error={err:.6f} m")
+    Logger.log("URDF", f"Servo commands (deg): {[round(d, 1) for d in arm.q_to_servo_deg(q_sol)]}")
