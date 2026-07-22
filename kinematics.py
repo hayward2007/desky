@@ -72,22 +72,30 @@ def _translate(x, y, z):
     return T
 
 
-def _rot(axis, theta):
-    """4x4 rotation of `theta` radians about a principal axis ('x'|'y'|'z')."""
+def _rot_axis(axis, theta):
+    """4x4 rotation of `theta` radians about an arbitrary unit axis (Rodrigues).
+
+    `axis` is a 3-vector; it is normalized here. This matches URDF, where each
+    joint rotates about an arbitrary <axis xyz="..."/>.
+    """
+    x, y, z = axis
+    n = math.sqrt(x * x + y * y + z * z)
+    if n < 1e-12:
+        raise ValueError("Zero-length rotation axis")
+    x, y, z = x / n, y / n, z / n
     c, s = math.cos(theta), math.sin(theta)
+    C = 1.0 - c
     T = _identity4()
-    if axis == "x":
-        T[1][1], T[1][2] = c, -s
-        T[2][1], T[2][2] = s, c
-    elif axis == "y":
-        T[0][0], T[0][2] = c, s
-        T[2][0], T[2][2] = -s, c
-    elif axis == "z":
-        T[0][0], T[0][1] = c, -s
-        T[1][0], T[1][1] = s, c
-    else:
-        raise ValueError(f"Unknown axis {axis!r}")
+    T[0][0], T[0][1], T[0][2] = c + x * x * C,     x * y * C - z * s, x * z * C + y * s
+    T[1][0], T[1][1], T[1][2] = y * x * C + z * s, c + y * y * C,     y * z * C - x * s
+    T[2][0], T[2][1], T[2][2] = z * x * C - y * s, z * y * C + x * s, c + z * z * C
     return T
+
+
+def _rpy(roll, pitch, yaw):
+    """4x4 fixed rotation from URDF rpy (extrinsic X-Y-Z, i.e. Rz*Ry*Rx)."""
+    return _matmul(_matmul(_rot_axis((0, 0, 1), yaw), _rot_axis((0, 1, 0), pitch)),
+                   _rot_axis((1, 0, 0), roll))
 
 
 def _inverse(M):
@@ -113,28 +121,36 @@ def _inverse(M):
 # ---------------------------------------------------------------------------
 # Joint model
 # ---------------------------------------------------------------------------
-_AXIS_LETTER = {"yaw": "z", "roll": "x", "pitch": "y"}
+# Axis unit vectors for the three joint roles (URDF <axis xyz="..."/> convention).
+YAW = (0.0, 0.0, 1.0)    # about Z
+ROLL = (1.0, 0.0, 0.0)   # about X
+PITCH = (0.0, 1.0, 0.0)  # about Y
 
 
 class Joint:
-    """One revolute joint.
+    """One revolute joint (mirrors a URDF <joint type="revolute">).
 
-    axis      : 'yaw' | 'roll' | 'pitch'  (Z / X / Y rotation)
-    offset    : (x, y, z) translation from previous joint frame to this joint
+    axis      : (x, y, z) unit rotation axis in the joint frame (YAW/ROLL/PITCH)
+    offset    : (x, y, z) origin translation from the parent joint frame
+    rpy       : (roll, pitch, yaw) fixed origin rotation (URDF origin rpy)
     home_deg  : servo angle in [0, 300] that corresponds to joint angle q = 0
     direction : +1 or -1; servo_deg = home_deg + direction * degrees(q)
     q_min/q_max : joint limits in radians (relative to home)
+    name      : URDF joint name (for reference)
     """
 
-    def __init__(self, id, axis, offset, home_deg=150.0, direction=1,
-                 q_min=-math.pi / 2, q_max=math.pi / 2):
+    def __init__(self, id, axis, offset, rpy=(0.0, 0.0, 0.0),
+                 home_deg=150.0, direction=1,
+                 q_min=-math.pi / 2, q_max=math.pi / 2, name=None):
         self.id = id
         self.axis = axis
         self.offset = offset
+        self.rpy = rpy
         self.home_deg = home_deg
         self.direction = direction
         self.q_min = q_min
         self.q_max = q_max
+        self.name = name
 
     # --- conversions between joint angle q (rad) and servo angle (deg, 0..300) ---
     def servo_deg(self, q):
@@ -150,11 +166,11 @@ class Joint:
 # Default chain matching id1=yaw, id2=roll, id3/4/5=pitch.
 # home_deg / direction / limits are placeholders — calibrate against the real arm.
 DEFAULT_JOINTS = [
-    Joint(id=1, axis="yaw",   offset=(0.0, 0.0, BASE_HEIGHT_MM)),
-    Joint(id=2, axis="roll",  offset=(0.0, 0.0, RISER_MM)),
-    Joint(id=3, axis="pitch", offset=(0.0, 0.0, SHOULDER_MM)),
-    Joint(id=4, axis="pitch", offset=(UPPER_ARM_MM, 0.0, 0.0)),
-    Joint(id=5, axis="pitch", offset=(FOREARM_MM, 0.0, 0.0)),
+    Joint(id=1, axis=YAW,   offset=(0.0, 0.0, BASE_HEIGHT_MM)),
+    Joint(id=2, axis=ROLL,  offset=(0.0, 0.0, RISER_MM)),
+    Joint(id=3, axis=PITCH, offset=(0.0, 0.0, SHOULDER_MM)),
+    Joint(id=4, axis=PITCH, offset=(UPPER_ARM_MM, 0.0, 0.0)),
+    Joint(id=5, axis=PITCH, offset=(FOREARM_MM, 0.0, 0.0)),
 ]
 TOOL_OFFSET = (TOOL_MM, 0.0, 0.0)  # id5 frame -> phone mount
 
@@ -172,7 +188,9 @@ class Arm:
         T = _identity4()
         for joint, qi in zip(self.joints, q):
             T = _matmul(T, _translate(*joint.offset))
-            T = _matmul(T, _rot(_AXIS_LETTER[joint.axis], qi))
+            if joint.rpy != (0.0, 0.0, 0.0):
+                T = _matmul(T, _rpy(*joint.rpy))
+            T = _matmul(T, _rot_axis(joint.axis, qi))
         T = _matmul(T, _translate(*self.tool_offset))
         return T
 
