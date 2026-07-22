@@ -18,6 +18,9 @@
     select { padding: 0.4rem; margin-top: 0.5rem; }
     #ask-result { font-family: monospace; white-space: pre-wrap; margin-top: 0.75rem; }
     .banner { padding: 0.75rem 1rem; border-radius: 8px; margin-top: 0.75rem; background: #fff3cd; color: #7a5b00; border: 1px solid #f0d999; }
+    .ask-controls { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; margin-top: 0.5rem; }
+    .ask-controls select, .ask-controls button { margin-top: 0; }
+    #mic-btn.listening { background: #b00020; color: #fff; }
   </style>
 </head>
 <body>
@@ -38,7 +41,8 @@
     </div>
     {% endif %}
     <textarea id="ask-text" rows="3" placeholder="Type a message or paste text to summarize..." {{ "disabled" if not gemini_configured }}></textarea>
-    <div>
+    <div class="ask-controls">
+      <button id="mic-btn" title="Speak your question">🎤</button>
       <select id="ask-mode" {{ "disabled" if not gemini_configured }}>
         <option value="chat">Chat</option>
         <option value="summary">Summarize</option>
@@ -46,6 +50,10 @@
       <button id="ask-btn" {{ "disabled" if not gemini_configured }}>Ask</button>
     </div>
     <div id="ask-result"></div>
+    <div class="ask-controls">
+      <button id="speak-btn">🔊 Speak answer</button>
+      <button id="stop-speak-btn">⏹ Stop</button>
+    </div>
   </section>
 
   <script>
@@ -58,6 +66,7 @@
     const startBtn = document.getElementById("start-btn");
 
     let ws = null;
+    let mediaStream = null; // set in start(); the mic recorder pulls its audio track from this
     let captureTimer = null;
     let framesSent = 0;
 
@@ -77,6 +86,26 @@
         stopCapture();
       };
       ws.onerror = () => setStatus("websocket error", "error");
+      // The server also pushes voice-clip transcripts back over this same
+      // connection (see webapp/app.py's ws_camera) — everything else on this
+      // socket is one-way (client -> server), so any text message is a
+      // transcript/error reply.
+      ws.onmessage = (event) => {
+        let msg;
+        try {
+          msg = JSON.parse(event.data);
+        } catch (e) {
+          return;
+        }
+        const el = document.getElementById("ask-result");
+        if (msg.type === "transcript") {
+          document.getElementById("ask-text").value = msg.text;
+          ask();
+        } else if (msg.type === "error") {
+          el.textContent = "STT error: " + msg.error;
+          el.className = "error";
+        }
+      };
     }
 
     function captureLoop() {
@@ -120,13 +149,14 @@
       setStatus("requesting camera + microphone permission...");
       try {
         // Both video and audio are requested together so the browser's
-        // permission prompt covers the microphone too. Only video frames are
-        // streamed to the server in this demo — the audio track is captured
-        // (permission granted, track exists) but not transmitted.
+        // permission prompt covers the microphone too. Video frames stream
+        // continuously; the audio track only gets sent when the mic button
+        // records a voice question (see the mic-btn click handler below).
         const stream = await navigator.mediaDevices.getUserMedia({
           video: { facingMode: "environment" },
           audio: true,
         });
+        mediaStream = stream;
         video.srcObject = stream;
         connectSocket();
         captureTimer = setInterval(captureLoop, FRAME_INTERVAL_MS);
@@ -162,6 +192,7 @@
         } else {
           el.textContent = data.answer;
           el.className = "";
+          speak(data.answer); // read the answer aloud right away — hands-free on the phone
         }
       } catch (e) {
         el.textContent = "request failed: " + e;
@@ -170,6 +201,78 @@
     }
 
     document.getElementById("ask-btn").addEventListener("click", ask);
+
+    // ── TTS: 브라우저 내장 음성 출력 ──────────────────────
+    function speak(text) {
+      if (!('speechSynthesis' in window)) {
+        alert("이 브라우저는 음성 출력을 지원하지 않습니다.");
+        return;
+      }
+      if (!text || !text.trim()) return;
+      window.speechSynthesis.cancel();        // 이전 음성 중단 후 새로 읽기
+      const utter = new SpeechSynthesisUtterance(text);
+      utter.lang = "ko-KR";                   // 한국어 목소리
+      utter.rate = 1.0;                       // 속도 (0.5~2)
+      window.speechSynthesis.speak(utter);
+    }
+
+    function stopSpeak() {
+      window.speechSynthesis.cancel();
+    }
+
+    document.getElementById("speak-btn").addEventListener("click", () => {
+      speak(document.getElementById("ask-result").textContent);
+    });
+    document.getElementById("stop-speak-btn").addEventListener("click", stopSpeak);
+
+    // ── STT: 음성을 녹음해서 서버로 보내고, 서버(Gemini)가 텍스트로 변환 ──
+    // (브라우저 내장 SpeechRecognition 대신 백엔드에서 처리 — 서버가 이미
+    // 연 /ws/camera 웹소켓을 그대로 재사용한다: 완결된 WebM/Opus 클립 하나를
+    // 통째로 보내면, 서버가 EBML 헤더로 오디오임을 알아채 STT를 수행하고
+    // 같은 소켓으로 {"type":"transcript", ...}를 돌려준다.)
+    const micBtn = document.getElementById("mic-btn");
+    let mediaRecorder = null;
+    let recordedChunks = [];
+    let listening = false;
+
+    function setListening(isListening) {
+      listening = isListening;
+      micBtn.classList.toggle("listening", isListening);
+      micBtn.textContent = isListening ? "🎤 Recording... (tap to stop)" : "🎤";
+    }
+
+    if (!window.MediaRecorder) {
+      micBtn.disabled = true;
+      micBtn.textContent = "🎤 (이 브라우저 미지원)";
+    } else {
+      micBtn.addEventListener("click", () => {
+        if (listening) {
+          mediaRecorder.stop(); // onstop below sends the clip and resets state
+          return;
+        }
+        const el = document.getElementById("ask-result");
+        if (!mediaStream || !ws || ws.readyState !== WebSocket.OPEN) {
+          el.textContent = "Tap \"Start camera + streaming\" first (grants mic access and opens the connection).";
+          el.className = "error";
+          return;
+        }
+        recordedChunks = [];
+        const audioOnlyStream = new MediaStream(mediaStream.getAudioTracks());
+        mediaRecorder = new MediaRecorder(audioOnlyStream, { mimeType: "audio/webm;codecs=opus" });
+        mediaRecorder.ondataavailable = (e) => {
+          if (e.data.size > 0) recordedChunks.push(e.data);
+        };
+        mediaRecorder.onstop = () => {
+          setListening(false);
+          const blob = new Blob(recordedChunks, { type: "audio/webm" });
+          ws.send(blob);
+          el.textContent = "transcribing...";
+          el.className = "";
+        };
+        mediaRecorder.start();
+        setListening(true);
+      });
+    }
   </script>
 </body>
 </html>

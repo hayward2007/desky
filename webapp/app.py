@@ -10,7 +10,11 @@ anything.
 Also serves /mobile: a page meant to be opened on the phone mounted on the
 arm's end-effector. It asks for camera+microphone permission and streams JPEG
 camera frames to the server over a WebSocket (/ws/camera). The main dashboard
-(/) polls the latest frame back over HTTP to preview it.
+(/) polls the latest frame back over HTTP to preview it. The same WebSocket
+also carries recorded voice-question clips (WebM/Opus) from the mic button —
+the server tells the two apart by content (JPEG's SOI marker vs WebM's EBML
+header), transcribes voice clips via Gemini, and sends the transcript back
+over that same connection.
 
 Also exposes /api/ask: a Gemini-backed chat/summary endpoint. If GEMINI_API_KEY
 isn't set (or the google-genai package isn't installed), that route reports
@@ -20,6 +24,7 @@ Run from the repository root:
     python -m webapp.app
 """
 
+import json
 import os
 import numpy as np
 import threading
@@ -145,13 +150,32 @@ def ask():
         return jsonify({"error": str(e)}), 502
 
 
+WEBM_EBML_HEADER = b"\x1a\x45\xdf\xa3"
+
+STT_INSTRUCTION = "이 오디오를 한국어 텍스트로 정확히 받아써줘. 설명 없이 텍스트만 출력해."
+
+
+def _transcribe(audio_bytes):
+    """Run one recorded voice clip through Gemini and return the transcript
+    text. Raises on failure — callers turn that into a {"type": "error"} reply."""
+    audio_part = genai_types.Part.from_bytes(data=audio_bytes, mime_type="audio/webm")
+    response = gemini_client.models.generate_content(
+        model=GEMINI_MODEL,
+        contents=[audio_part, STT_INSTRUCTION],
+    )
+    return response.text
+
+
 @sock.route("/ws/camera")
 def ws_camera(ws):
-    """Receives JPEG camera frames streamed from /mobile.
+    """Receives JPEG camera frames and recorded voice-question clips from
+    /mobile, both over this one connection.
 
-    Each incoming binary message is one complete JPEG frame (see mobile.html —
-    it snapshots the phone's camera onto a canvas and sends canvas.toBlob()
-    output directly, so there's no video container/codec to reassemble here).
+    Each incoming binary message is either one complete JPEG frame (canvas
+    snapshot — see mobile.html's captureLoop) or one complete WebM/Opus clip
+    (MediaRecorder output from the mic button). They're told apart by their
+    magic bytes rather than a custom header, so the client doesn't need any
+    extra framing beyond "send the whole blob".
     """
     with camera_lock:
         camera_state["clients"] += 1
@@ -163,12 +187,26 @@ def ws_camera(ws):
                 break
             if not isinstance(data, (bytes, bytearray)):
                 continue
+            data = bytes(data)
+
+            if data[:4] == WEBM_EBML_HEADER:
+                Logger.log("STT", f"Received voice clip ({len(data)} bytes)")
+                if gemini_client is None:
+                    ws.send(json.dumps({"type": "error", "error": f"Gemini not configured: {gemini_error}"}))
+                    continue
+                try:
+                    transcript = _transcribe(data)
+                    Logger.log("STT", f"Transcript: {transcript!r}")
+                    ws.send(json.dumps({"type": "transcript", "text": transcript}))
+                except Exception as e:
+                    Logger.log("STT", f"Transcription failed: {e}")
+                    ws.send(json.dumps({"type": "error", "error": str(e)}))
+                continue
+
             with camera_lock:
-                camera_state["frame"] = bytes(data)
+                camera_state["frame"] = data
                 camera_state["frame_time"] = time.time()
                 camera_state["frame_count"] += 1
-                
-            
     finally:
         with camera_lock:
             camera_state["clients"] -= 1
