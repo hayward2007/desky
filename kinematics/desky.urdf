@@ -2,21 +2,26 @@
 <!--
   desky 5-DOF arm — Unified Robot Description Format (URDF).
 
-  Kinematic chain (yaw . roll . pitch . pitch . pitch):
-      base_link  [joint1 yaw   Z]  link1
-      link1      [joint2 roll  X]  link2
-      link2      [joint3 pitch Y]  link3
-      link3      [joint4 pitch Y]  link4
-      link4      [joint5 pitch Y]  link5
-      link5      [tool_joint fixed]  phone_mount   (end-effector)
+  Built from 5 identical DYNAMIXEL AX-18A servos. Each servo body is a box
+  size = 0.047 (X) x 0.03 (Y) x 0.04 (Z). Its output shaft (rotation axis) is
+  perpendicular to the TOP face (local Z), passing through the point that is
+  centred in Y and 10 mm behind the front short edge:
+      shaft point in box frame = (0.0135, 0, 0.02)
+  So every dynamixel link's frame origin sits ON that shaft axis at the top
+  face, and the box <visual> is offset by (-0.0135, 0, -0.02) from it. The
+  joint <axis> is therefore local Z (0 0 1) for all five.
 
-  Units: meters and radians (URDF convention).
+  Joint roles (base . tip), achieved by mounting each servo so its shaft points
+  along the required world axis (via the joint origin rpy):
+      joint1 yaw   -> shaft along world Z
+      joint2 roll  -> shaft along world X
+      joint3 pitch -> shaft along world Y  (shoulder)
+      joint4 pitch -> shaft along world Y  (elbow)
+      joint5 pitch -> shaft along world Y  (wrist)
 
-  NOTE: link lengths (joint <origin xyz>) are PLACEHOLDERS — measure the real
-  arm and update them. The <dynamixel> block on each joint is a project-specific
-  extension carrying the DYNAMIXEL id/model and the servo calibration used to
-  map joint angle q -> servo angle (0..300 deg). Standard URDF tools ignore it;
-  urdf_loader.py reads it.
+  Units: meters and radians. Inter-servo spacings (joint origin xyz) are
+  PLACEHOLDERS — measure the real arm and update them. The <dynamixel> block is
+  a project-specific extension read by urdf_loader.py; standard tools ignore it.
 -->
 <robot name="desky">
 
@@ -24,42 +29,42 @@
   <link name="base_link">
     <visual>
       <origin xyz="0 0 0.025" rpy="0 0 0"/>
-      <geometry><box size="0.08 0.08 0.05"/></geometry>
+      <geometry><box size="0.12 0.12 0.05"/></geometry>
     </visual>
   </link>
 
-  <link name="link1">
+  <link name="dynamixel1">
     <visual>
-      <origin xyz="0 0 0.015" rpy="0 0 0"/>
-      <geometry><cylinder radius="0.03" length="0.03"/></geometry>
+      <origin xyz="-0.0135 0 -0.02" rpy="0 0 0"/>
+      <geometry><box size="0.047 0.03 0.04"/></geometry>
     </visual>
   </link>
 
-  <link name="link2">
+  <link name="dynamixel2">
     <visual>
-      <origin xyz="0 0 0.02" rpy="0 0 0"/>
-      <geometry><box size="0.04 0.04 0.04"/></geometry>
+      <origin xyz="-0.0135 0 -0.02" rpy="0 0 0"/>
+      <geometry><box size="0.047 0.03 0.04"/></geometry>
     </visual>
   </link>
 
-  <link name="link3">
+  <link name="dynamixel3">
     <visual>
-      <origin xyz="0.06 0 0" rpy="0 0 0"/>
-      <geometry><box size="0.12 0.03 0.03"/></geometry>
+      <origin xyz="-0.0135 0 -0.02" rpy="0 0 0"/>
+      <geometry><box size="0.047 0.03 0.04"/></geometry>
     </visual>
   </link>
 
-  <link name="link4">
+  <link name="dynamixel4">
     <visual>
-      <origin xyz="0.05 0 0" rpy="0 0 0"/>
-      <geometry><box size="0.10 0.03 0.03"/></geometry>
+      <origin xyz="-0.0135 0 -0.02" rpy="0 0 0"/>
+      <geometry><box size="0.047 0.03 0.04"/></geometry>
     </visual>
   </link>
 
-  <link name="link5">
+  <link name="dynamixel5">
     <visual>
-      <origin xyz="0.04 0 0" rpy="0 0 0"/>
-      <geometry><box size="0.08 0.02 0.02"/></geometry>
+      <origin xyz="-0.0135 0 -0.02" rpy="0 0 0"/>
+      <geometry><box size="0.047 0.03 0.04"/></geometry>
     </visual>
   </link>
 
@@ -74,52 +79,52 @@
   <!-- ===================== Joints ===================== -->
   <joint name="joint1" type="revolute">
     <parent link="base_link"/>
-    <child link="link1"/>
-    <origin xyz="0 0 0.05" rpy="0 0 0"/>
-    <axis xyz="0 0 1"/>              <!-- yaw -->
+    <child link="dynamixel1"/>
+    <origin xyz="0 0 0.095" rpy="0 0 0"/>
+    <axis xyz="0 0 1"/>                          <!-- yaw : shaft along world Z -->
     <limit lower="-1.5708" upper="1.5708" effort="1.5" velocity="6.0"/>
     <dynamixel id="1" model="AX-18A" home_deg="150" direction="1"/>
   </joint>
 
   <joint name="joint2" type="revolute">
-    <parent link="link1"/>
-    <child link="link2"/>
-    <origin xyz="0 0 0.03" rpy="0 0 0"/>
-    <axis xyz="1 0 0"/>              <!-- roll -->
+    <parent link="dynamixel1"/>
+    <child link="dynamixel2"/>
+    <origin xyz="-0.01 0 0.02" rpy="0 1.5708 3.1416"/>
+    <axis xyz="0 0 1"/>                          <!-- roll : shaft along world X -->
     <limit lower="-1.5708" upper="1.5708" effort="1.5" velocity="6.0"/>
     <dynamixel id="2" model="AX-18A" home_deg="150" direction="1"/>
   </joint>
 
   <joint name="joint3" type="revolute">
-    <parent link="link2"/>
-    <child link="link3"/>
-    <origin xyz="0 0 0.04" rpy="0 0 0"/>
-    <axis xyz="0 1 0"/>              <!-- pitch -->
+    <parent link="dynamixel2"/>
+    <child link="dynamixel3"/>
+    <origin xyz="-0.0275 0.02 0.02" rpy="-1.5708 3.1416 0"/>
+    <axis xyz="0 0 1"/>                          <!-- pitch (shoulder) : shaft along world Y -->
     <limit lower="-1.5708" upper="1.5708" effort="1.5" velocity="6.0"/>
-    <dynamixel id="3" model="AX-18A" home_deg="150" direction="1"/>
+    <dynamixel id="3" model="AX-18A" home_deg="180" direction="1"/>
   </joint>
 
   <joint name="joint4" type="revolute">
-    <parent link="link3"/>
-    <child link="link4"/>
-    <origin xyz="0.12 0 0" rpy="0 0 0"/>
-    <axis xyz="0 1 0"/>              <!-- pitch -->
+    <parent link="dynamixel3"/>
+    <child link="dynamixel4"/>
+    <origin xyz="0.115 0 0" rpy="0 0 0"/>
+    <axis xyz="0 0 1"/>                          <!-- pitch (elbow) : shaft along world Y -->
     <limit lower="-1.5708" upper="1.5708" effort="1.5" velocity="6.0"/>
     <dynamixel id="4" model="AX-18A" home_deg="150" direction="1"/>
   </joint>
 
   <joint name="joint5" type="revolute">
-    <parent link="link4"/>
-    <child link="link5"/>
-    <origin xyz="0.10 0 0" rpy="0 0 0"/>
-    <axis xyz="0 1 0"/>              <!-- pitch -->
+    <parent link="dynamixel4"/>
+    <child link="dynamixel5"/>
+    <origin xyz="0.115 0 0" rpy="0 0 0"/>
+    <axis xyz="0 0 1"/>                          <!-- pitch (wrist) : shaft along world Y -->
     <limit lower="-1.5708" upper="1.5708" effort="1.5" velocity="6.0"/>
     <dynamixel id="5" model="AX-18A" home_deg="150" direction="1"/>
   </joint>
 
-  <!-- Fixed transform from the last joint to the phone-mount frame. -->
+  <!-- Fixed transform from the last servo to the phone-mount frame. -->
   <joint name="tool_joint" type="fixed">
-    <parent link="link5"/>
+    <parent link="dynamixel5"/>
     <child link="phone_mount"/>
     <origin xyz="0.08 0 0" rpy="0 0 0"/>
   </joint>

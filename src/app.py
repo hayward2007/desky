@@ -58,7 +58,7 @@ try:
     # at module load time, so even that missing package must count as "no
     # hardware connected" rather than crashing the whole app.
     from hardware.controller import Controller
-    from hardware.util import Actuator, ArmController
+    from hardware.actuator import Actuator, ArmController
 
     controller = Controller()
     actuators = [Actuator(id=i, model="AX-18A", controller=controller) for i in range(1, 6)]

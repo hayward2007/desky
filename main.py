@@ -11,7 +11,7 @@ reachable. Also opens a local cv2 preview window of the phone's camera feed
 """
 
 from logger import Logger
-from webapp.app import run
+from src.app import run
 
 Logger.enabled = True  # attach logging for this run; set False to silence
 
