@@ -4,7 +4,7 @@ Renders the arm from the URDF <visual> geometry (solid boxes per link) and lets
 you drive it two ways, reading the same geometry source as the real robot
 (kinematics/desky.urdf):
 
-  * FK: drag one slider per joint (joint angle in degrees) — the arm redraws
+  * FK: drag one slider per joint (servo degree, 30..330) — the arm redraws
     live and the end-effector position is shown in the title.
   * IK: type a target x/y/z and press "Solve IK" — kinematics.Arm.ik solves the
     joint angles, the sliders jump to the solution, and the pose redraws.
@@ -281,18 +281,20 @@ def main():
     status = fig.text(0.5, 0.015, "", ha="center", fontsize=9, color="#333")
 
     def current_q():
-        return [math.radians(s.val) for s in sliders]
+        # Sliders carry servo degrees; convert to joint angle q via each joint's
+        # own calibration (home_deg / direction).
+        return [joint.q_from_servo(s.val) for joint, s in zip(arm.joints, sliders)]
 
     def redraw(_=None):
         draw_pose(ax, arm, root_link, chain, visuals, current_q(), bounds)
         fig.canvas.draw_idle()
 
-    # ---- FK: one slider per joint (angle in degrees, within URDF limits) ----
+    # ---- FK: one slider per joint (servo degree, 30..330), starts at home ----
     sliders = []
     for i, joint in enumerate(arm.joints):
         sax = fig.add_axes([0.10, 0.25 - i * 0.038, 0.52, 0.025])
-        s = Slider(sax, f"{joint.name} (°)",
-                   math.degrees(joint.q_min), math.degrees(joint.q_max), valinit=0.0)
+        lo, hi = sorted((joint.servo_deg(joint.q_min), joint.servo_deg(joint.q_max)))
+        s = Slider(sax, f"{joint.name} (servo°)", lo, hi, valinit=joint.home_deg)
         s.on_changed(redraw)
         sliders.append(s)
 
@@ -312,8 +314,8 @@ def main():
         q, ok = arm.ik(target, seed=current_q())
         if ok:
             # set_val triggers each slider's on_changed -> redraw.
-            for s, qi in zip(sliders, q):
-                s.set_val(math.degrees(qi))
+            for joint, s, qi in zip(arm.joints, sliders, q):
+                s.set_val(joint.servo_deg(qi))
             status.set_text(f"IK converged  ->  servo(deg) = "
                             f"{[round(d) for d in arm.q_to_servo_deg(q)]}")
         else:

@@ -96,7 +96,8 @@ class Controller :
             return False
         return self._check_comm(id, "SET POSITION", comm_result, error)
 
-    # output is degrees, 0 to 300, maximum range for AX-18A is 0 to 300 degrees
+    # output is degrees, 30 to 330 (inverse of set_goal_position's mapping:
+    # unit value 0..1023 <-> 30..330 deg).
     # Returns position in degrees, or None if the read failed (caller must handle None).
     def get_present_position(self, id: int, control_table: ActuatorControlTable) :
         try :
@@ -107,7 +108,7 @@ class Controller :
             return None
         if not self._check_comm(id, "GET POSITION", comm_result, error) :
             return None
-        position_degrees = data / control_table.Unit_Number * 360  # Convert unit value to degrees
+        position_degrees = 30 + data / control_table.Unit_Number * 300  # Convert unit value to degrees
         return position_degrees
 
     # def set_mode(self, id: int, mode: int) :

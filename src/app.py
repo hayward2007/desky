@@ -24,18 +24,24 @@ Run from the repository root:
     python -m webapp.app
 """
 
-import json
-import os
+import io
 import numpy as np
 import threading
-import time
 import cv2
+
+import matplotlib
+matplotlib.use("Agg")  # headless: render arm previews to PNG, no display/window
+from matplotlib.figure import Figure
+from matplotlib.backends.backend_agg import FigureCanvasAgg
 
 from flask import Flask, Response, jsonify, render_template, request
 from flask_sock import Sock
 
-from kinematics.urdf_loader import load_arm
+from kinematics.urdf_loader import load_arm, _DEFAULT_URDF_PATH
+from simulation.simulate import parse_urdf, draw_pose, workspace_bounds
 from logger import Logger
+from src.api.gemini import Gemini
+from src.api.camera import Camera
 
 try:
     # Optional: only needed to read GEMINI_API_KEY (and hardware's .env vars)
@@ -71,27 +77,13 @@ except Exception as e:
 # Joint list is needed to render the per-joint controls even with no hardware.
 arm = arm_ctrl.arm if arm_ctrl is not None else load_arm()
 
-GEMINI_MODEL = "gemini-flash-latest"  # fast, generous free tier
-GEMINI_CHAT_INSTRUCTION = "너는 친절한 한국어 AI 비서야. 자연스럽게 대화해줘."
-GEMINI_SUMMARY_INSTRUCTION = "너는 문서를 간결하게 요약해주는 비서야. 핵심만 한국어로 정리해줘."
+# Geometry for the server-side 3D preview (/api/render). Parsed once; the
+# workspace bounds keep the preview's framing stable across poses.
+_root_link, _chain, _visuals = parse_urdf(_DEFAULT_URDF_PATH)
+_render_bounds = workspace_bounds(arm, _root_link, _chain, _visuals)
 
-gemini_client = None
-gemini_error = None
-try:
-    from google import genai
-    from google.genai import types as genai_types
-
-    gemini_client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
-    Logger.log("GEMINI", f"Gemini client configured (model={GEMINI_MODEL})")
-except Exception as e:
-    gemini_error = str(e)
-    Logger.log("GEMINI", f"Gemini not configured: {gemini_error}")
-
-# Latest JPEG frame received from the phone's camera over /ws/camera, plus a
-# few counters for the dashboard's status display. Guarded by camera_lock
-# since the WebSocket handler runs on its own request thread.
-camera_lock = threading.Lock()
-camera_state = {"frame": None, "frame_time": None, "frame_count": 0, "clients": 0}
+gemini = Gemini()
+camera = Camera(gemini)
 
 
 @app.route("/")
@@ -110,8 +102,8 @@ def mobile():
         joint_ids=[joint.id for joint in arm.joints],
         hardware_connected=arm_ctrl is not None,
         hardware_error=hardware_error,
-        gemini_configured=gemini_client is not None,
-        gemini_error=gemini_error,
+        gemini_configured=gemini.configured,
+        gemini_error=gemini.error,
     )
 
 @app.route("/api/status")
@@ -121,119 +113,10 @@ def status():
     return jsonify({"connected": True, "position": arm_ctrl.get_position()})
 
 
-@app.route("/api/ask", methods=["POST"])
-def ask():
-    if gemini_client is None:
-        return jsonify({"error": f"Gemini not configured: {gemini_error}"}), 503
-
-    data = request.get_json(force=True)
-    text = data.get("text") if data else None
-    mode = data.get("mode", "chat") if data else "chat"
-    if not text:
-        return jsonify({"error": "text is required"}), 400
-
-    system = GEMINI_SUMMARY_INSTRUCTION if mode == "summary" else GEMINI_CHAT_INSTRUCTION
-
-    Logger.log("GEMINI", f"ask request: mode={mode}, text length={len(text)}")
-    try:
-        response = gemini_client.models.generate_content(
-            model=GEMINI_MODEL,
-            contents=text,
-            config=genai_types.GenerateContentConfig(
-                system_instruction=system,
-                max_output_tokens=1024,
-            ),
-        )
-        return jsonify({"answer": response.text})
-    except Exception as e:
-        Logger.log("GEMINI", f"ask failed: {e}")
-        return jsonify({"error": str(e)}), 502
-
-
-WEBM_EBML_HEADER = b"\x1a\x45\xdf\xa3"
-
-STT_INSTRUCTION = "이 오디오를 한국어 텍스트로 정확히 받아써줘. 설명 없이 텍스트만 출력해."
-
-
-def _transcribe(audio_bytes):
-    """Run one recorded voice clip through Gemini and return the transcript
-    text. Raises on failure — callers turn that into a {"type": "error"} reply."""
-    audio_part = genai_types.Part.from_bytes(data=audio_bytes, mime_type="audio/webm")
-    response = gemini_client.models.generate_content(
-        model=GEMINI_MODEL,
-        contents=[audio_part, STT_INSTRUCTION],
-    )
-    return response.text
-
-
-@sock.route("/ws/camera")
-def ws_camera(ws):
-    """Receives JPEG camera frames and recorded voice-question clips from
-    /mobile, both over this one connection.
-
-    Each incoming binary message is either one complete JPEG frame (canvas
-    snapshot — see mobile.html's captureLoop) or one complete WebM/Opus clip
-    (MediaRecorder output from the mic button). They're told apart by their
-    magic bytes rather than a custom header, so the client doesn't need any
-    extra framing beyond "send the whole blob".
-    """
-    with camera_lock:
-        camera_state["clients"] += 1
-    Logger.log("CAMERA", "Mobile client connected")
-    try:
-        while True:
-            data = ws.receive()
-            if data is None:
-                break
-            if not isinstance(data, (bytes, bytearray)):
-                continue
-            data = bytes(data)
-
-            if data[:4] == WEBM_EBML_HEADER:
-                Logger.log("STT", f"Received voice clip ({len(data)} bytes)")
-                if gemini_client is None:
-                    ws.send(json.dumps({"type": "error", "error": f"Gemini not configured: {gemini_error}"}))
-                    continue
-                try:
-                    transcript = _transcribe(data)
-                    Logger.log("STT", f"Transcript: {transcript!r}")
-                    ws.send(json.dumps({"type": "transcript", "text": transcript}))
-                except Exception as e:
-                    Logger.log("STT", f"Transcription failed: {e}")
-                    ws.send(json.dumps({"type": "error", "error": str(e)}))
-                continue
-
-            with camera_lock:
-                camera_state["frame"] = data
-                camera_state["frame_time"] = time.time()
-                camera_state["frame_count"] += 1
-    finally:
-        with camera_lock:
-            camera_state["clients"] -= 1
-        Logger.log("CAMERA", "Mobile client disconnected")
-
-
-@app.route("/api/camera/latest.jpg")
-def camera_latest_frame():
-    with camera_lock:
-        frame = camera_state["frame"]
-    if frame is None:
-        return jsonify({"error": "no camera frame received yet"}), 404
-    return Response(frame, mimetype="image/jpeg")
-
-
-@app.route("/api/camera/status")
-def camera_status():
-    with camera_lock:
-        frame_time = camera_state["frame_time"]
-        frame_count = camera_state["frame_count"]
-        clients = camera_state["clients"]
-    return jsonify({
-        "streaming": frame_time is not None,
-        "clients": clients,
-        "frame_count": frame_count,
-        "age_seconds": (time.time() - frame_time) if frame_time is not None else None,
-    })
+app.route("/api/ask", methods=["POST"], endpoint="ask")(gemini.ask)
+sock.route("/ws/camera")(camera.ws_camera)
+app.route("/api/camera/latest.jpg", endpoint="camera_latest_frame")(camera.latest_frame)
+app.route("/api/camera/status", endpoint="camera_status")(camera.status)
 
 
 @app.route("/api/goto_position", methods=["POST"])
@@ -275,6 +158,50 @@ def fk():
         return err
     q = arm.servo_deg_to_q(degs)
     return jsonify({"position": list(arm.fk(q))})
+
+
+@app.route("/api/render", methods=["POST"])
+def render():
+    """Render the arm at the given servo angles to a PNG (server-side matplotlib,
+    same drawing code as the desktop simulation). Powers the web 3D preview and
+    needs no hardware."""
+    degs, err = _parse_degrees(request.get_json(force=True))
+    if err:
+        return err
+    q = arm.servo_deg_to_q(degs)
+
+    fig = Figure(figsize=(6, 6))
+    FigureCanvasAgg(fig)
+    ax = fig.add_subplot(111, projection="3d", computed_zorder=False)
+    ax.view_init(elev=22, azim=-55)
+    draw_pose(ax, arm, _root_link, _chain, _visuals, q, _render_bounds)
+
+    buf = io.BytesIO()
+    fig.savefig(buf, format="png", dpi=90)
+    return Response(buf.getvalue(), mimetype="image/png")
+
+
+@app.route("/api/ik", methods=["POST"])
+def ik():
+    """Solve IK for a target (x, y, z) and return the per-joint servo degrees.
+    Does NOT move anything — the web sim uses it to preview a solution. `seed`
+    (optional) is the current servo degrees, used as the IK starting guess."""
+    data = request.get_json(force=True)
+    try:
+        target = (float(data["x"]), float(data["y"]), float(data["z"]))
+    except (KeyError, TypeError, ValueError):
+        return jsonify({"error": "x, y, z must be numbers"}), 400
+
+    seed = None
+    raw_seed = data.get("seed") if data else None
+    if isinstance(raw_seed, list) and len(raw_seed) == len(arm.joints):
+        try:
+            seed = arm.servo_deg_to_q([float(d) for d in raw_seed])
+        except (TypeError, ValueError):
+            seed = None
+
+    q, converged = arm.ik(target, seed=seed)
+    return jsonify({"converged": converged, "servo_deg": arm.q_to_servo_deg(q)})
 
 
 @app.route("/api/goto_joints", methods=["POST"])
@@ -350,9 +277,7 @@ def run():
     last_frame_count = 0
     try:
         while True:
-            with camera_lock:
-                frame_bytes = camera_state["frame"]
-                frame_count = camera_state["frame_count"]
+            frame_bytes, frame_count = camera.snapshot()
             # Only decode+show on a genuinely new frame — the phone only
             # sends ~5 fps, but this loop spins far faster (waitKey(1) is a
             # ~1ms cap, not a guarantee), so without this check it would
