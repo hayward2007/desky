@@ -253,6 +253,49 @@ def goto_position():
     return jsonify({"converged": converged, "servo_deg": servo_deg})
 
 
+def _parse_degrees(data):
+    """Validate a request body carrying one servo degree per joint (in joint
+    order). Returns (degrees, error_response). Exactly one is non-None."""
+    degs = data.get("degrees") if data else None
+    if not isinstance(degs, list) or len(degs) != len(arm.joints):
+        return None, (jsonify({"error": f"degrees must be a list of {len(arm.joints)} numbers"}), 400)
+    try:
+        return [float(d) for d in degs], None
+    except (TypeError, ValueError):
+        return None, (jsonify({"error": "degrees must be numbers"}), 400)
+
+
+@app.route("/api/fk", methods=["POST"])
+def fk():
+    """Forward kinematics only — compute the end-effector position for a set of
+    servo angles WITHOUT moving anything. Works even with no hardware, so the
+    dashboard can preview an FK pose before committing to it."""
+    degs, err = _parse_degrees(request.get_json(force=True))
+    if err:
+        return err
+    q = arm.servo_deg_to_q(degs)
+    return jsonify({"position": list(arm.fk(q))})
+
+
+@app.route("/api/goto_joints", methods=["POST"])
+def goto_joints():
+    """FK control of ALL actuators at once: set every joint's servo angle and
+    drive all five servos, then report the resulting FK position."""
+    if arm_ctrl is None:
+        return jsonify({"error": "no hardware connected"}), 503
+
+    degs, err = _parse_degrees(request.get_json(force=True))
+    if err:
+        return err
+
+    Logger.log("WEBAPP", f"goto_joints request: degrees={degs}")
+    try:
+        pos = arm_ctrl.goto_joints(degs)
+    except ValueError as e:  # e.g. a servo degree outside 0..300
+        return jsonify({"error": str(e)}), 400
+    return jsonify({"position": list(pos)})
+
+
 @app.route("/api/goto_joint", methods=["POST"])
 def goto_joint():
     if arm_ctrl is None:

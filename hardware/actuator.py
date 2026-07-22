@@ -66,6 +66,28 @@ class ArmController:
             actuator.goto(deg, speed=speed)
         return q, converged
 
+    def goto_joints(self, servo_degs, speed: float = 10):
+        """FK-style control: command EVERY actuator to a given servo angle and
+        return the resulting end-effector position via forward kinematics.
+
+        servo_degs: list of servo angles (deg, 0..300) in self.arm.joints order,
+        or a dict {dynamixel_id: deg}. Unlike goto_position (which runs IK), this
+        sets the joints directly and reports where the tool ends up (FK).
+        """
+        if isinstance(servo_degs, dict):
+            servo_degs = [servo_degs[joint.id] for joint in self.arm.joints]
+        if len(servo_degs) != len(self.actuators):
+            raise ValueError(f"expected {len(self.actuators)} servo angles, got {len(servo_degs)}")
+
+        for actuator, deg in zip(self.actuators, servo_degs):
+            actuator.goto(deg, speed=speed)
+
+        q = self.arm.servo_deg_to_q(servo_degs)
+        pos = self.arm.fk(q)
+        Logger.log("ARM", f"goto_joints servo_deg={[round(d, 1) for d in servo_degs]} -> "
+                   f"FK {tuple(round(v, 4) for v in pos)}")
+        return pos
+
     def get_position(self):
         """Read back every actuator's servo angle and return the FK position.
 

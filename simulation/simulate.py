@@ -1,22 +1,21 @@
-"""3D preview of the desky arm — no hardware required.
+"""Interactive 3D FK/IK preview of the desky arm — no hardware required.
 
-For now this only renders the arm at its HOME pose (all joint angles = 0) using
-the URDF <visual> geometry (solid boxes/cylinders per link), so the preview
-looks like the actual robot rather than a stick figure. It reads the same
-geometry source as the real robot (kinematics/desky.urdf).
+Renders the arm from the URDF <visual> geometry (solid boxes per link) and lets
+you drive it two ways, reading the same geometry source as the real robot
+(kinematics/desky.urdf):
+
+  * FK: drag one slider per joint (joint angle in degrees) — the arm redraws
+    live and the end-effector position is shown in the title.
+  * IK: type a target x/y/z and press "Solve IK" — kinematics.Arm.ik solves the
+    joint angles, the sliders jump to the solution, and the pose redraws.
 
 Rendering notes:
-  * Every box face is given its own colour AND a number (1..6), so you can tell
-    which face is which (1 = +Z top, 2 = -Z bottom, 3 = +X, 4 = -X, 5 = +Y,
-    6 = -Y, in each link's own frame). A legend maps number -> face.
-  * Each revolute joint's rotation axis is drawn as an arrow at the joint.
+  * Every box face has its own colour AND a number (1..6): 1 = +Z top,
+    2 = -Z bottom, 3 = +X, 4 = -X, 5 = +Y, 6 = -Y (each link's own frame).
+  * Each revolute joint's rotation axis is drawn as a yellow arrow.
   * All link faces go into ONE Poly3DCollection so matplotlib depth-sorts them
-    per-face. With a separate collection per link, matplotlib sorts whole links
-    against each other (painter's algorithm), which makes overlapping links pop
-    in front of one another incorrectly.
-
-The animated DEMO_SEQUENCE playback is intentionally left out until the rest of
-the pipeline is in place; add it back on top of this static renderer later.
+    per-face; a separate collection per link would sort whole links against each
+    other (painter's algorithm) and make overlapping links pop incorrectly.
 
 Requires matplotlib (not a dependency of the kinematics package itself):
     pip install matplotlib
@@ -27,6 +26,7 @@ import xml.etree.ElementTree as ET
 
 import matplotlib.pyplot as plt
 from matplotlib.patches import Patch
+from matplotlib.widgets import Slider, Button, TextBox
 from mpl_toolkits.mplot3d.art3d import Poly3DCollection
 
 from kinematics.kinematics import _matmul, _translate, _rpy, _rot_axis
@@ -208,64 +208,123 @@ def joint_axes(chain, frames, length=0.07):
     return out
 
 
-def main():
-    arm = load_arm()
-    root_link, chain, visuals = parse_urdf(_DEFAULT_URDF_PATH)
+def workspace_bounds(arm, root_link, chain, visuals, margin=0.03):
+    """A fixed 1:1:1 cube covering the arm's motion, so the view doesn't jump
+    while sliders move. Sampled from each joint at its min/0/max limits."""
+    n = len(arm.joints)
+    samples = [[0.0] * n]
+    for i, joint in enumerate(arm.joints):
+        for val in (joint.q_min, joint.q_max):
+            q = [0.0] * n
+            q[i] = val
+            samples.append(q)
 
-    # Home pose: every joint angle at 0.
-    q_home = [0.0] * len(arm.joints)
-    frames = link_world_transforms(root_link, chain, q_home)
+    pts = []
+    for q in samples:
+        faces, _, _ = collect_faces(visuals, link_world_transforms(root_link, chain, q))
+        for face in faces:
+            pts.extend(face)
+    xs, ys, zs = zip(*pts)
+    span = max(max(xs) - min(xs), max(ys) - min(ys), max(zs) - min(zs)) + 2 * margin
+    cx, cy, cz = (min(xs) + max(xs)) / 2, (min(ys) + max(ys)) / 2, (min(zs) + max(zs)) / 2
+    return cx, cy, cz, span
 
+
+def draw_pose(ax, arm, root_link, chain, visuals, q, bounds):
+    """Clear `ax` and draw the arm at joint angles q. Returns the FK position."""
+    frames = link_world_transforms(root_link, chain, q)
     faces, colors, labels = collect_faces(visuals, frames)
 
-    fig = plt.figure(figsize=(9, 9))
-    # computed_zorder=False so our manual zorders win: the single face collection
-    # stays behind, joint-axis arrows and face numbers always draw on top instead
-    # of being occluded by opaque boxes.
-    ax = fig.add_subplot(111, projection="3d", computed_zorder=False)
-    ax.set_xlabel("X (m)")
-    ax.set_ylabel("Y (m)")
-    ax.set_zlabel("Z (m)")
-    ax.set_title("desky 5-DOF arm — home pose (URDF visual)")
-
-    # Single collection => matplotlib depth-sorts every face together, which
-    # fixes the "one whole link jumps in front of another" overlap artefact.
+    ax.cla()
     coll = Poly3DCollection(faces, facecolors=colors, edgecolor="#20232a",
                             linewidths=0.4, alpha=1.0, zorder=0)
     coll.set_zsort("average")
     ax.add_collection3d(coll)
 
-    # Face numbers (on top of the faces).
     for (cx, cy, cz), text in labels:
-        ax.text(cx, cy, cz, text, fontsize=6, ha="center", va="center",
+        ax.text(cx, cy, cz, text, fontsize=5, ha="center", va="center",
                 color="white", zorder=5)
 
-    # Joint rotation axes (arrows) + labels, always drawn on top.
     for name, (ox, oy, oz), (dx, dy, dz) in joint_axes(chain, frames):
         ax.quiver(ox - dx, oy - dy, oz - dz, 2*dx, 2*dy, 2*dz,
-                  color="#ffd600", linewidth=2.6, arrow_length_ratio=0.15, zorder=8)
-        ax.text(ox + dx, oy + dy, oz + dz, f"  {name} axis", fontsize=7,
-                color="#c17900", zorder=9)
+                  color="#ffd600", linewidth=2.2, arrow_length_ratio=0.14, zorder=8)
 
-    # Equal 1:1:1 aspect from every vertex.
-    pts = [p for f in faces for p in f]
-    xs, ys, zs = zip(*pts)
-    m = 0.03
-    span = max(max(xs) - min(xs), max(ys) - min(ys), max(zs) - min(zs)) + 2 * m
-    cx, cy, cz = (min(xs)+max(xs))/2, (min(ys)+max(ys))/2, (min(zs)+max(zs))/2
-    ax.set_xlim(cx - span/2, cx + span/2)
-    ax.set_ylim(cy - span/2, cy + span/2)
-    ax.set_zlim(cz - span/2, cz + span/2)
+    ee = arm.fk(q)
+    ax.scatter([ee[0]], [ee[1]], [ee[2]], color="red", s=45, zorder=9)
+
+    bx, by, bz, span = bounds
+    ax.set_xlim(bx - span/2, bx + span/2)
+    ax.set_ylim(by - span/2, by + span/2)
+    ax.set_zlim(bz - span/2, bz + span/2)
     ax.set_box_aspect((1, 1, 1))
-    ax.view_init(elev=22, azim=-55)
-
-    # Legend: number -> face.
+    ax.set_xlabel("X (m)")
+    ax.set_ylabel("Y (m)")
+    ax.set_zlabel("Z (m)")
+    ax.set_title(f"FK: end-effector = ({ee[0]:.3f}, {ee[1]:.3f}, {ee[2]:.3f}) m")
     handles = [Patch(facecolor=FACE_COLORS[i], edgecolor="#20232a",
                      label=f"{i+1}: {FACE_NAMES[i]}") for i in range(6)]
-    ax.legend(handles=handles, loc="upper left", fontsize=8, title="Box faces (link frame)")
+    ax.legend(handles=handles, loc="upper left", fontsize=7, title="Box faces")
+    return ee
 
-    Logger.log("SIM", f"Rendering home pose, end-effector at "
-                      f"{tuple(round(v, 3) for v in arm.fk(q_home))}")
+
+def main():
+    arm = load_arm()
+    root_link, chain, visuals = parse_urdf(_DEFAULT_URDF_PATH)
+    bounds = workspace_bounds(arm, root_link, chain, visuals)
+
+    fig = plt.figure(figsize=(10, 9))
+    # computed_zorder=False so joint-axis arrows / face numbers always draw on
+    # top of the opaque boxes instead of being occluded by them.
+    ax = fig.add_axes([0.02, 0.34, 0.74, 0.62], projection="3d", computed_zorder=False)
+    ax.view_init(elev=22, azim=-55)
+
+    status = fig.text(0.5, 0.015, "", ha="center", fontsize=9, color="#333")
+
+    def current_q():
+        return [math.radians(s.val) for s in sliders]
+
+    def redraw(_=None):
+        draw_pose(ax, arm, root_link, chain, visuals, current_q(), bounds)
+        fig.canvas.draw_idle()
+
+    # ---- FK: one slider per joint (angle in degrees, within URDF limits) ----
+    sliders = []
+    for i, joint in enumerate(arm.joints):
+        sax = fig.add_axes([0.10, 0.25 - i * 0.038, 0.52, 0.025])
+        s = Slider(sax, f"{joint.name} (°)",
+                   math.degrees(joint.q_min), math.degrees(joint.q_max), valinit=0.0)
+        s.on_changed(redraw)
+        sliders.append(s)
+
+    # ---- IK: type a target x/y/z, solve, and snap the sliders to it ----
+    tb_x = TextBox(fig.add_axes([0.83, 0.24, 0.12, 0.045]), "x ", initial="0.00")
+    tb_y = TextBox(fig.add_axes([0.83, 0.18, 0.12, 0.045]), "y ", initial="0.00")
+    tb_z = TextBox(fig.add_axes([0.83, 0.12, 0.12, 0.045]), "z ", initial="0.30")
+    btn_ik = Button(fig.add_axes([0.83, 0.05, 0.12, 0.05]), "Solve IK")
+
+    def solve_ik(_):
+        try:
+            target = (float(tb_x.text), float(tb_y.text), float(tb_z.text))
+        except ValueError:
+            status.set_text("IK: x, y, z must be numbers")
+            fig.canvas.draw_idle()
+            return
+        q, ok = arm.ik(target, seed=current_q())
+        if ok:
+            # set_val triggers each slider's on_changed -> redraw.
+            for s, qi in zip(sliders, q):
+                s.set_val(math.degrees(qi))
+            status.set_text(f"IK converged  ->  servo(deg) = "
+                            f"{[round(d) for d in arm.q_to_servo_deg(q)]}")
+        else:
+            status.set_text(f"IK did NOT converge for {target} (out of reach?)")
+        fig.canvas.draw_idle()
+
+    btn_ik.on_clicked(solve_ik)
+
+    redraw()
+    Logger.log("SIM", "Interactive FK/IK viewer: drag joint sliders (FK), "
+                      "or enter x/y/z and press Solve IK")
     plt.show()
 
 

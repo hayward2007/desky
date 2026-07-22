@@ -85,9 +85,9 @@ class Controller :
 
     # input is degrees, 0 to 300, maximum range for AX-18A is 0 to 300 degrees
     def set_goal_position(self, id: int, position: float, control_table: ActuatorControlTable) -> bool :
-        if position < 0 or position > 300 :
-            raise ValueError("[CONTROLLER] Position must be between 0 and 300")
-        position_value = int(position / 360 * control_table.Unit_Number)  # Convert degrees to unit value
+        if position < 30 or position > 330 :
+            raise ValueError("[CONTROLLER] Position must be between 30 and 330")
+        position_value = int((position-30) / 300 * control_table.Unit_Number)  # Convert degrees to unit value
         try :
             comm_result, error = self.packet_handler.write2ByteTxRx(
                 self.port_handler, id, control_table.Address.Goal_Position, position_value)

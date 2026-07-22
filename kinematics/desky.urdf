@@ -83,7 +83,7 @@
     <origin xyz="0 0 0.095" rpy="0 0 0"/>
     <axis xyz="0 0 1"/>                          <!-- yaw : shaft along world Z -->
     <limit lower="-1.5708" upper="1.5708" effort="1.5" velocity="6.0"/>
-    <dynamixel id="1" model="AX-18A" home_deg="150" direction="1"/>
+    <dynamixel id="1" model="AX-18A" home_deg="180" direction="1"/>
   </joint>
 
   <joint name="joint2" type="revolute">
@@ -92,7 +92,7 @@
     <origin xyz="-0.01 0 0.02" rpy="0 1.5708 3.1416"/>
     <axis xyz="0 0 1"/>                          <!-- roll : shaft along world X -->
     <limit lower="-1.5708" upper="1.5708" effort="1.5" velocity="6.0"/>
-    <dynamixel id="2" model="AX-18A" home_deg="150" direction="1"/>
+    <dynamixel id="2" model="AX-18A" home_deg="180" direction="1"/>
   </joint>
 
   <joint name="joint3" type="revolute">
@@ -110,7 +110,7 @@
     <origin xyz="0.115 0 0" rpy="0 0 0"/>
     <axis xyz="0 0 1"/>                          <!-- pitch (elbow) : shaft along world Y -->
     <limit lower="-1.5708" upper="1.5708" effort="1.5" velocity="6.0"/>
-    <dynamixel id="4" model="AX-18A" home_deg="150" direction="1"/>
+    <dynamixel id="4" model="AX-18A" home_deg="180" direction="1"/>
   </joint>
 
   <joint name="joint5" type="revolute">
@@ -119,7 +119,7 @@
     <origin xyz="0.115 0 0" rpy="0 0 0"/>
     <axis xyz="0 0 1"/>                          <!-- pitch (wrist) : shaft along world Y -->
     <limit lower="-1.5708" upper="1.5708" effort="1.5" velocity="6.0"/>
-    <dynamixel id="5" model="AX-18A" home_deg="150" direction="1"/>
+    <dynamixel id="5" model="AX-18A" home_deg="180" direction="1"/>
   </joint>
 
   <!-- Fixed transform from the last servo to the phone-mount frame. -->
