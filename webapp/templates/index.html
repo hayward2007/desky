@@ -1,0 +1,114 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>desky arm control</title>
+  <style>
+    body { font-family: system-ui, sans-serif; max-width: 640px; margin: 2rem auto; padding: 0 1rem; color: #222; }
+    h1 { font-size: 1.4rem; }
+    section { border: 1px solid #ddd; border-radius: 8px; padding: 1rem; margin-bottom: 1.5rem; }
+    section h2 { margin-top: 0; font-size: 1.1rem; }
+    label { display: inline-block; width: 3rem; }
+    input[type="number"] { width: 6rem; padding: 0.25rem; }
+    button { padding: 0.4rem 1rem; margin-left: 0.5rem; cursor: pointer; }
+    .joint-row { display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.5rem; }
+    .joint-row label { width: 4rem; }
+    #status, #position-result, #joint-result { font-family: monospace; white-space: pre-wrap; margin-top: 0.75rem; }
+    .error { color: #b00020; }
+  </style>
+</head>
+<body>
+  <h1>desky arm control</h1>
+
+  <section>
+    <h2>Current position (FK read-back)</h2>
+    <div id="status">loading...</div>
+  </section>
+
+  <section>
+    <h2>Move to position (IK)</h2>
+    <div class="joint-row">
+      <label for="x">x (m)</label><input type="number" id="x" step="0.001" value="0.2">
+      <label for="y">y (m)</label><input type="number" id="y" step="0.001" value="0">
+      <label for="z">z (m)</label><input type="number" id="z" step="0.001" value="0.1">
+      <button onclick="gotoPosition()">Move</button>
+    </div>
+    <div id="position-result"></div>
+  </section>
+
+  <section>
+    <h2>Move a single joint (servo degrees, 0-300)</h2>
+    {% for joint_id in joint_ids %}
+    <div class="joint-row">
+      <label for="joint-{{ joint_id }}">id {{ joint_id }}</label>
+      <input type="number" id="joint-{{ joint_id }}" min="0" max="300" step="1" value="150">
+      <button onclick="gotoJoint({{ joint_id }})">Go</button>
+    </div>
+    {% endfor %}
+    <div id="joint-result"></div>
+  </section>
+
+  <script>
+    async function refreshStatus() {
+      const el = document.getElementById("status");
+      try {
+        const res = await fetch("/api/status");
+        const data = await res.json();
+        el.textContent = data.position
+          ? `x=${data.position[0].toFixed(4)} y=${data.position[1].toFixed(4)} z=${data.position[2].toFixed(4)}`
+          : "unavailable (an actuator failed to report its position)";
+        el.className = data.position ? "" : "error";
+      } catch (e) {
+        el.textContent = "status request failed: " + e;
+        el.className = "error";
+      }
+    }
+
+    async function gotoPosition() {
+      const x = parseFloat(document.getElementById("x").value);
+      const y = parseFloat(document.getElementById("y").value);
+      const z = parseFloat(document.getElementById("z").value);
+      const el = document.getElementById("position-result");
+      el.textContent = "moving...";
+      el.className = "";
+      const res = await fetch("/api/goto_position", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ x, y, z }),
+      });
+      const data = await res.json();
+      if (!res.ok || data.error) {
+        el.textContent = "error: " + (data.error || res.status);
+        el.className = "error";
+      } else if (!data.converged) {
+        el.textContent = "IK did not converge for that target — no servos moved.";
+        el.className = "error";
+      } else {
+        el.textContent = "servo_deg = " + JSON.stringify(data.servo_deg.map((d) => d.toFixed(1)));
+      }
+    }
+
+    async function gotoJoint(id) {
+      const degree = parseFloat(document.getElementById("joint-" + id).value);
+      const el = document.getElementById("joint-result");
+      el.textContent = `moving joint ${id}...`;
+      el.className = "";
+      const res = await fetch("/api/goto_joint", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id, degree }),
+      });
+      const data = await res.json();
+      if (!res.ok || data.error) {
+        el.textContent = "error: " + (data.error || res.status);
+        el.className = "error";
+      } else {
+        el.textContent = `joint ${id} -> ${degree} deg`;
+      }
+    }
+
+    refreshStatus();
+    setInterval(refreshStatus, 1500);
+  </script>
+</body>
+</html>

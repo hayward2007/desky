@@ -25,8 +25,18 @@ DEVICE_NAME=tty01        # /dev/ 접두어 제외
 BAUDRATE=1000000
 PROTOCOL_VERSION=1.0
 ```
-의존성: `dynamixel_sdk`, `python-dotenv`. 기구학 모듈은 **표준 라이브러리만** 사용
-(numpy 불필요). Python 3.14 확인됨.
+의존성: `dynamixel_sdk`, `python-dotenv` (하드웨어 제어), `matplotlib` (`simulation/` 3D
+프리뷰 전용), `flask` (`webapp/` 제어 대시보드 전용). 기구학 모듈 자체는 **표준 라이브러리만**
+사용(numpy 불필요). Python 3.14 확인됨.
+
+Homebrew Python은 PEP 668로 시스템 전역 `pip install`을 막으므로, `matplotlib`/`flask` 설치는
+프로젝트 venv를 권장:
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+pip install matplotlib flask
+```
 
 ## 파일 구조
 
@@ -35,44 +45,108 @@ PROTOCOL_VERSION=1.0
 
 ```
 desky/
-├── main.py            # 데모 시나리오 진입점
+├── main.py            # 데모 시나리오 진입점 (실제 하드웨어)
+├── scenario.py         # main.py/simulation이 공유하는 모션 시퀀스 (단일 소스)
 ├── logger.py           # 공통 [TAG] message 콘솔 로거
 ├── hardware/           # 시리얼/서보 제어 (실제 하드웨어 필요)
 │   ├── controller.py
 │   ├── control_table.py
 │   └── util.py
-└── kinematics/         # FK/IK (하드웨어 불필요, 표준 라이브러리만 사용)
-    ├── kinematics.py
-    ├── urdf_loader.py
-    └── desky.urdf
+├── kinematics/         # FK/IK (하드웨어 불필요, 표준 라이브러리만 사용)
+│   ├── kinematics.py
+│   ├── urdf_loader.py
+│   └── desky.urdf
+├── simulation/         # 3D 프리뷰 (하드웨어 불필요, matplotlib 필요)
+│   └── simulate.py
+└── webapp/             # Flask 제어 대시보드 (실제 하드웨어 필요)
+    ├── app.py
+    └── templates/
+        └── index.html
 ```
 
 | 파일 | 역할 |
 |------|------|
-| [main.py](main.py) | 데모 시나리오 (액추에이터 5개 생성 → 자세 명령). 실제 하드웨어 필요 |
+| [main.py](main.py) | 데모 시나리오 (액추에이터 5개 생성 → `scenario.DEMO_SEQUENCE` 재생). 실제 하드웨어 필요 |
+| [scenario.py](scenario.py) | `DEMO_SEQUENCE` — 서보각 웨이포인트 시퀀스. `main.py`/`simulation.simulate`가 동일하게 참조하는 단일 소스 |
 | [logger.py](logger.py) | `Logger` — 모든 모듈이 공유하는 `[TAG] message` 콘솔 로거 |
 | [hardware/controller.py](hardware/controller.py) | 시리얼 포트/보드레이트 초기화, 저수준 read/write (`set_speed`, `set_goal_position`, `get_present_position`) |
 | [hardware/control_table.py](hardware/control_table.py) | AX-18A 컨트롤 테이블(레지스터 주소·바이트 크기)을 클래스로 정의 |
-| [hardware/util.py](hardware/util.py) | `Actuator` 클래스 — 모터 1개 추상화 (`goto`, `get_position`) |
+| [hardware/util.py](hardware/util.py) | `Actuator`(모터 1개 추상화) + `ArmController`(FK/IK ↔ Actuator 연동) |
 | [kinematics/kinematics.py](kinematics/kinematics.py) | FK/IK. `Arm`/`Joint` + 순수 파이썬 선형대수. 하드웨어 불필요 |
 | [kinematics/urdf_loader.py](kinematics/urdf_loader.py) | `desky.urdf`를 파싱해 `Arm` 생성 (`xml.etree`) |
 | [kinematics/desky.urdf](kinematics/desky.urdf) | **로봇 구성의 단일 소스 오브 트루스** (URDF, XML) |
+| [simulation/simulate.py](simulation/simulate.py) | `scenario.DEMO_SEQUENCE`를 3D로 애니메이션 재생 (matplotlib) |
+| [webapp/app.py](webapp/app.py) | Flask 앱 — 브라우저에서 위치/관절각 입력 → `ArmController` 호출. 실제 하드웨어 필요 |
+| [webapp/templates/index.html](webapp/templates/index.html) | 대시보드 UI (위치 입력, 관절별 입력, 상태 표시) |
 
-`hardware/`, `kinematics/` 모두 패키지(`__init__.py` 포함)이며, 내부 모듈 간 임포트는
-상대 임포트(`.control_table`, `.kinematics`)를 쓴다. `logger.py`는 루트에 있으므로
-어디서든 `from logger import Logger`로 절대 임포트한다. 항상 **저장소 루트에서** 실행할 것
-(`python3 main.py`, `python3 -m kinematics.kinematics` 등) — 하위 폴더의 파일을 직접
-실행하면(`python3 kinematics/kinematics.py`) 루트가 `sys.path`에 없어 `logger` 임포트가
-깨진다.
+`hardware/`, `kinematics/`, `simulation/`, `webapp/` 모두 패키지(`__init__.py` 포함)이며,
+`hardware`/`kinematics` 내부 모듈 간 임포트는 상대 임포트(`.control_table`, `.kinematics`)를
+쓴다. `logger.py`/`scenario.py`는 루트에 있으므로 어디서든 `from logger import Logger`,
+`from scenario import DEMO_SEQUENCE`로 절대 임포트한다. 항상 **저장소 루트에서** 실행할 것
+(`python3 main.py`, `python3 -m kinematics.kinematics`, `python3 -m simulation.simulate`,
+`python3 -m webapp.app` 등) — 하위 폴더의 파일을 직접 실행하면(`python3 kinematics/kinematics.py`)
+루트가 `sys.path`에 없어 `logger`/`scenario` 임포트가 깨진다.
 
 ### 계층
 ```
 main.py
-  └─ hardware.util.Actuator ── hardware.controller.Controller ── hardware.control_table.AX_18A + dynamixel_sdk
-kinematics.kinematics.Arm ◄── kinematics.urdf_loader.load_arm()   # 하드웨어와 독립
+  └─ hardware.util.ArmController ── hardware.util.Actuator ×5 ── hardware.controller.Controller ── hardware.control_table.AX_18A + dynamixel_sdk
+                  └─ kinematics.kinematics.Arm ◄── kinematics.urdf_loader.load_arm()
 ```
-현재 `main.py`(하드웨어 제어)와 기구학(`kinematics`/`urdf_loader`)은 **아직 연결되지
-않음**. IK로 구한 서보각을 `Actuator.goto()`로 보내는 연동은 미구현.
+`hardware.util.ArmController`가 FK/IK(`kinematics.Arm`)와 실제 `Actuator` 5개를 연결한다.
+`Actuator.id`(DYNAMIXEL id)와 URDF `<dynamixel id="">`가 일치하는 조인트를 서로 매칭하므로,
+생성자에 넘기는 `actuators` 리스트는 순서에 상관없다.
+
+```python
+from hardware.controller import Controller
+from hardware.util import Actuator, ArmController
+
+controller = Controller()
+actuators = [Actuator(id=i, model="AX-18A", controller=controller) for i in range(1, 6)]
+arm_ctrl = ArmController(actuators)             # arm=load_arm() 기본값 사용
+
+q, ok = arm_ctrl.goto_position((0.3, 0.05, 0.15))   # IK 계산 → 5개 서보에 goto() 디스패치
+pos = arm_ctrl.get_position()                        # 5개 서보 현재각 read → FK로 위치 계산
+```
+
+- `goto_position`은 IK가 수렴하지 않으면(`converged=False`) 서보를 움직이지 않는다.
+- `get_position`은 액추에이터 중 하나라도 `None`을 반환하면(통신 실패) 전체 결과도 `None`.
+
+## 웹 제어 대시보드 (실제 하드웨어 필요)
+
+```bash
+python3 -m venv .venv && source .venv/bin/activate && pip install flask   # 최초 1회
+python3 -m webapp.app   # 저장소 루트에서 실행, http://localhost:5000
+```
+
+`webapp/app.py`는 `main.py`와 동일하게 시작 시 `Controller()`로 시리얼 포트를 열고 액추에이터
+5개 + `ArmController`를 구성한다(즉 `.env` 설정과 실제 하드웨어 필요). 브라우저 대시보드에서:
+
+- 목표 위치 (x, y, z, 미터) 입력 → `ArmController.goto_position()` 호출 (IK → 5개 서보 이동)
+- 관절별 서보각(0~300°) 직접 입력 → 해당 `Actuator.goto()` 직접 호출 (IK 우회)
+- 1.5초마다 `ArmController.get_position()`으로 현재 위치를 폴링해 표시
+
+라우트: `GET /`(대시보드), `GET /api/status`, `POST /api/goto_position`,
+`POST /api/goto_joint`. `app.run(..., debug=False)` 고정 — Flask 리로더가 모듈을 다시
+임포트하면 시리얼 포트가 두 번 열리므로 `debug=True`로 바꾸지 말 것.
+
+## 3D 시뮬레이션 (하드웨어 없이 미리보기)
+
+```bash
+python3 -m venv .venv && source .venv/bin/activate && pip install matplotlib   # 최초 1회
+python3 -m simulation.simulate   # 저장소 루트에서 실행
+```
+
+`simulation/simulate.py`는 `kinematics.urdf_loader.load_arm()`으로 로봇 형상
+(`kinematics/desky.urdf`)을, `scenario.DEMO_SEQUENCE`로 모션 웨이포인트를 읽어 3D로 애니메이션
+재생한다. `main.py`가 실제 하드웨어에 보내는 것과 **같은 시퀀스**를 그대로 재생하므로(둘 다
+`scenario.py` import), `scenario.py`만 수정하면 두 스크립트가 함께 바뀐다.
+`kinematics.Arm.fk_all(q)`가 base → 각 관절 → tool tip 위치 목록을 반환해 막대 인형(stick
+figure) 형태로 그린다.
+
+주의: `simulation/simulate.py`는 서보 웨이포인트를 URDF의 `<limit>`(IK용 소프트 리미트)로
+클램프하지 않는다 — 실제 `Actuator.goto()`도 물리 범위(0~300°) 안이면 그 리미트를 무시하고
+그대로 움직이므로, 시뮬레이션도 동일하게 동작해야 "실제 로봇과 정확히 같은" 모션이 된다.
 
 ## 기구학 사용법
 

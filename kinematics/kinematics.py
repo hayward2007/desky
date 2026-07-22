@@ -185,21 +185,34 @@ class Arm:
         self.tool_offset = tool_offset
 
     # ---------------- Forward kinematics ----------------
-    def fk_matrix(self, q):
-        """Return the 4x4 end-effector pose given joint angles q (radians)."""
-        T = _identity4()
+    def _fk_frames(self, q):
+        """Return every intermediate 4x4 transform: base identity, after each
+        joint's full step, and finally after the tool offset."""
+        frames = [_identity4()]
+        T = frames[0]
         for joint, qi in zip(self.joints, q):
             T = _matmul(T, _translate(*joint.offset))
             if joint.rpy != (0.0, 0.0, 0.0):
                 T = _matmul(T, _rpy(*joint.rpy))
             T = _matmul(T, _rot_axis(joint.axis, qi))
-        T = _matmul(T, _translate(*self.tool_offset))
-        return T
+            frames.append(T)
+        frames.append(_matmul(T, _translate(*self.tool_offset)))
+        return frames
+
+    def fk_matrix(self, q):
+        """Return the 4x4 end-effector pose given joint angles q (radians)."""
+        return self._fk_frames(q)[-1]
 
     def fk(self, q):
         """Return just the end-effector position (x, y, z)."""
         T = self.fk_matrix(q)
         return (T[0][3], T[1][3], T[2][3])
+
+    def fk_all(self, q):
+        """Return the (x, y, z) position at the base, after each joint, and
+        at the tool tip — every vertex needed to draw the arm as a connected
+        stick figure."""
+        return [(T[0][3], T[1][3], T[2][3]) for T in self._fk_frames(q)]
 
     # ---------------- Inverse kinematics ----------------
     def ik(self, target_pos, target_rot=None, seed=None,
