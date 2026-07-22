@@ -5,8 +5,8 @@ import math
 import time
 import os
 
-from controller import Controller
-from util import Actuator
+from hardware.controller import Controller
+from hardware.util import Actuator
 from logger import Logger
 
 Logger.enabled = True  # attach logging for this run; set False to silence

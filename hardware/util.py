@@ -1,5 +1,5 @@
-from control_table import AX_18A
-from controller import Controller
+from .control_table import AX_18A
+from .controller import Controller
 from logger import Logger
 
 import time

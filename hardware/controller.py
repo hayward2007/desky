@@ -1,5 +1,5 @@
 from dynamixel_sdk import *
-from control_table import *
+from .control_table import *
 from dotenv import load_dotenv
 from logger import Logger
 import os

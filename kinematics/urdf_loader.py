@@ -9,10 +9,13 @@ Only Python's standard library is used (xml.etree.ElementTree).
 """
 
 import math
+import os
 import xml.etree.ElementTree as ET
 
-from kinematics import Arm, Joint, _matmul, _translate, _rpy
+from .kinematics import Arm, Joint, _matmul, _translate, _rpy
 from logger import Logger
+
+_DEFAULT_URDF_PATH = os.path.join(os.path.dirname(__file__), "desky.urdf")
 
 
 def _parse_triplet(text, default=(0.0, 0.0, 0.0)):
@@ -34,9 +37,10 @@ def _rpy_from_matrix(R):
     return (roll, pitch, yaw)
 
 
-def load_arm(path="desky.urdf"):
-    """Parse `path` and return a kinematics.Arm following the serial chain."""
-    root = ET.parse(path).getroot()
+def load_arm(path=None):
+    """Parse `path` (default: desky.urdf next to this file) and return a
+    kinematics.Arm following the serial chain."""
+    root = ET.parse(path or _DEFAULT_URDF_PATH).getroot()
 
     joints = {}          # name -> joint element
     child_to_joint = {}  # child link name -> joint element
@@ -111,7 +115,7 @@ def load_arm(path="desky.urdf"):
 
 
 if __name__ == "__main__":
-    arm = load_arm("desky.urdf")
+    arm = load_arm()
     Logger.log("URDF", "Loaded joints from URDF:")
     for j in arm.joints:
         Logger.log("URDF", f"  {j.name}: id={j.id} axis={j.axis} offset={j.offset} "
