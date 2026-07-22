@@ -267,6 +267,26 @@ def draw_pose(ax, arm, root_link, chain, visuals, q, bounds):
     return ee
 
 
+def draw_points(ax, points, connections=None, point_color="lime", line_color="lime",
+                s=25, linewidth=1.5, zorder=10):
+    """Scatter `points` (world xyz) and draw `connections` (index pairs into
+    `points`) as 3D line segments, on top of whatever draw_pose already drew.
+
+    Generic overlay, not robot-specific — used to render e.g. a mediapipe hand
+    skeleton (21 landmarks + HAND_CONNECTIONS) alongside the arm.
+    """
+    if not points:
+        return
+    xs, ys, zs = zip(*points)
+    ax.scatter(xs, ys, zs, color=point_color, s=s, zorder=zorder)
+    if connections:
+        for i, j in connections:
+            if i < len(points) and j < len(points):
+                p, q = points[i], points[j]
+                ax.plot3D([p[0], q[0]], [p[1], q[1]], [p[2], q[2]],
+                          color=line_color, linewidth=linewidth, zorder=zorder)
+
+
 def main():
     arm = load_arm()
     root_link, chain, visuals = parse_urdf(_DEFAULT_URDF_PATH)

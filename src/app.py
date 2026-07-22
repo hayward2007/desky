@@ -29,6 +29,8 @@ import numpy as np
 import threading
 import cv2
 import io
+import math
+import time
 
 import matplotlib
 matplotlib.use("Agg")  # headless: render arm previews to PNG, no display/window
@@ -39,7 +41,7 @@ from flask import Flask, Response, jsonify, render_template, request
 from flask_sock import Sock
 
 from kinematics.urdf_loader import load_arm, _DEFAULT_URDF_PATH
-from simulation.simulate import parse_urdf, draw_pose, workspace_bounds
+from simulation.simulate import parse_urdf, draw_pose, draw_points, workspace_bounds
 from logger import Logger
 from src.api.gemini import Gemini
 from src.api.camera import Camera
@@ -78,10 +80,89 @@ except Exception as e:
 # Joint list is needed to render the per-joint controls even with no hardware.
 arm = arm_ctrl.arm if arm_ctrl is not None else load_arm()
 
-# Geometry for the server-side 3D preview (/api/render). Parsed once; the
-# workspace bounds keep the preview's framing stable across poses.
+# Geometry for the server-side 3D preview (/api/render) and the local 3D scene
+# window in run(). Parsed once; the workspace bounds keep the preview's framing
+# stable across poses.
 _root_link, _chain, _visuals = parse_urdf(_DEFAULT_URDF_PATH)
 _render_bounds = workspace_bounds(arm, _root_link, _chain, _visuals)
+
+
+_Q_CACHE_TTL = 0.5  # seconds
+_q_cache = {"q": None, "t": 0.0}
+
+
+def _current_q():
+    """Current joint angles (radians), throttled to _Q_CACHE_TTL.
+
+    Both the /api/status poll and the run() 3D-scene overlay (which redraws on
+    every mobile camera frame, ~5/s) need the current pose, but each actuator
+    readback is its own DYNAMIXEL serial round trip x5 joints. Without this
+    shared cache the two call sites would independently re-read all 5
+    actuators far more often than the arm's pose actually changes, flooding
+    the serial bus. Returns None if there's no hardware, or the very first
+    read fails (a later failure just keeps serving the stale cached pose).
+    """
+    if arm_ctrl is None:
+        return None
+    now = time.monotonic()
+    if _q_cache["q"] is not None and now - _q_cache["t"] < _Q_CACHE_TTL:
+        return _q_cache["q"]
+    servo_degs = [a.get_position() for a in arm_ctrl.actuators]
+    if any(d is None for d in servo_degs):
+        return _q_cache["q"]
+    _q_cache["q"] = arm.servo_deg_to_q(servo_degs)
+    _q_cache["t"] = now
+    return _q_cache["q"]
+
+
+# Assumed pinhole focal length in image-WIDTH-normalized units (i.e. a point at
+# distance `d` with real-world offset `o` perpendicular to the optical axis
+# lands at normalized offset o / (d / _CAMERA_FOCAL_NORM) from center). ~1.0
+# corresponds to a ~53 deg horizontal FOV, a reasonable phone-camera ballpark.
+# There's no real calibration here, so hand distances below are an estimate,
+# not a measurement.
+_CAMERA_FOCAL_NORM = 1.0
+_HAND_WRIST_TO_THUMB_CMC_M = 0.035  # landmark 0 (wrist) -> landmark 1 (thumb CMC)
+
+
+def _hand_depth_m(landmarks, frame_width, frame_height):
+    """Estimate one hand's distance from the camera (meters) from how large it
+    appears on screen: a hand that looks smaller is farther away, not shrunk.
+    Assumes the real wrist(0)->thumb-CMC(1) span is _HAND_WRIST_TO_THUMB_CMC_M
+    and inverts the pinhole projection (apparent_size = focal * real_size /
+    distance) to solve for distance.
+    """
+    wrist, thumb_cmc = landmarks[0], landmarks[1]
+    dx = (thumb_cmc.x - wrist.x) * frame_width
+    dy = (thumb_cmc.y - wrist.y) * frame_height
+    apparent = math.hypot(dx, dy) / frame_width
+    apparent = max(apparent, 1e-4)  # guard against a degenerate (near-zero) detection
+    return _CAMERA_FOCAL_NORM * _HAND_WRIST_TO_THUMB_CMC_M / apparent
+
+
+def _hand_landmark_to_world(landmark, T_ee, depth):
+    """Place one mediapipe hand landmark in world coordinates, assuming the
+    phone's camera sits at the end-effector and looks along its local +X (the
+    same direction as the URDF tool offset). `depth` is the whole hand's
+    estimated distance from the camera (see _hand_depth_m) — at that distance
+    a normalized image offset of `o` corresponds to a real offset of
+    `o * depth / _CAMERA_FOCAL_NORM`, so as the hand moves away it gets placed
+    farther back along the optical axis while its reconstructed size stays
+    ~_HAND_WRIST_TO_THUMB_CMC_M instead of shrinking the way it does in the raw
+    2D image. landmark.z (mediapipe's relative depth within the hand) is
+    scaled the same way for finger-to-finger depth (e.g. a curled finger).
+    """
+    scale = depth / _CAMERA_FOCAL_NORM
+    right = (landmark.x - 0.5) * scale
+    down = (landmark.y - 0.5) * scale
+    forward = depth + landmark.z * scale
+    # Points came out rotated 90deg clockwise; rotate the (right, down) plane
+    # 90deg counter-clockwise to correct it: (right, down) -> (down, -right).
+    right, down = down, -right
+    x, y, z = forward, -right, -down
+    return (T_ee[0][0] * x + T_ee[0][1] * y + T_ee[0][2] * z + T_ee[0][3],
+            T_ee[1][0] * x + T_ee[1][1] * y + T_ee[1][2] * z + T_ee[1][3],
+            T_ee[2][0] * x + T_ee[2][1] * y + T_ee[2][2] * z + T_ee[2][3])
 
 gemini = Gemini()
 camera = Camera(gemini)
@@ -111,7 +192,8 @@ def mobile():
 def status():
     if arm_ctrl is None:
         return jsonify({"connected": False, "position": None, "error": hardware_error})
-    return jsonify({"connected": True, "position": arm_ctrl.get_position()})
+    q = _current_q()
+    return jsonify({"connected": True, "position": list(arm.fk(q)) if q is not None else None})
 
 
 app.route("/api/ask", methods=["POST"], endpoint="ask")(gemini.ask)
@@ -289,13 +371,21 @@ def run():
     mp_drawing = mp.solutions.drawing_utils
     mp_hands = mp.solutions.hands
 
+    # Persistent 3D scene (robot + hand overlay), rendered off-screen (Agg,
+    # same as /api/render) and shown via cv2 so it doesn't fight the module's
+    # Agg backend or need a second GUI event loop on the main thread.
+    fig3d = Figure(figsize=(6, 6))
+    canvas3d = FigureCanvasAgg(fig3d)
+    ax3d = fig3d.add_subplot(111, projection="3d", computed_zorder=False)
+    ax3d.view_init(elev=22, azim=-55)
+
     try:
         with mp_hands.Hands(
             static_image_mode=False,
             max_num_hands=2,
             min_detection_confidence=0.5,
             min_tracking_confidence=0.5) as hands:
-            
+
             while True:
                 frame_bytes, frame_count = camera.snapshot()
                 # Only decode+show on a genuinely new frame — the phone only
@@ -306,16 +396,20 @@ def run():
                     last_frame_count = frame_count
                     frame = cv2.imdecode(np.frombuffer(frame_bytes, np.uint8), cv2.IMREAD_COLOR)
                     frame = cv2.rotate(frame, cv2.ROTATE_90_CLOCKWISE)
-                    
-                    
+
+
                     image = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                    results = hands.process(frame)
-                    
+                    results = hands.process(image)
+
+                    q = _current_q() or [0.0] * len(arm.joints)
+                    T_ee = arm.fk_matrix(q)
+
+                    hand_world_point_sets = []
                     if results.multi_hand_landmarks:
                         for hand_landmarks in results.multi_hand_landmarks:
                             mp_drawing.draw_landmarks(
                                 frame, hand_landmarks, mp_hands.HAND_CONNECTIONS)
-                            
+
                             # 엄지와 검지 손 끝 연결 후 거리 측정
                             point_index = [0,1,5,17]
                             first_point = hand_landmarks.landmark[0]
@@ -326,9 +420,33 @@ def run():
                             cv2.line(frame, coords[2], coords[3], (0, 255, 0), 2)
                             cv2.line(frame, coords[3], coords[0], (0, 255, 0), 2)
 
-                    
+
+                            # point = tuple((a + b) / 2 for a, b in zip(coords[0], coords[2]))
+
+                            # cv2.circle(frame, point, radius=2, color=(0, 255, 0), thickness=-1)
+
+                            # Bigger on screen -> closer, not "bigger" -- recover a real
+                            # distance from apparent size (see _hand_depth_m) so the hand
+                            # moves back in 3D as it shrinks on screen, instead of just
+                            # shrinking in place.
+                            depth = _hand_depth_m(hand_landmarks.landmark, frame.shape[1], frame.shape[0])
+                            hand_world_point_sets.append([
+                                _hand_landmark_to_world(lm, T_ee, depth)
+                                for lm in hand_landmarks.landmark
+                            ])
+
                     if frame is not None:
                         cv2.imshow("Mobile camera", frame)
+
+                    # 3D scene: current robot pose plus any detected hand(s),
+                    # placed relative to the end-effector (the phone/camera
+                    # mount) via forward kinematics.
+                    draw_pose(ax3d, arm, _root_link, _chain, _visuals, q, _render_bounds)
+                    for world_points in hand_world_point_sets:
+                        draw_points(ax3d, world_points, mp_hands.HAND_CONNECTIONS)
+                    canvas3d.draw()
+                    scene = cv2.cvtColor(np.asarray(canvas3d.buffer_rgba()), cv2.COLOR_RGBA2BGR)
+                    cv2.imshow("3D scene (robot + hand)", scene)
                 # waitKey both drives HighGUI's event loop (without it the window
                 # never actually renders/refreshes) and lets 'q'/Esc quit.
                 key = cv2.waitKey(1) & 0xFF
