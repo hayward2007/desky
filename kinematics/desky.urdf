@@ -89,7 +89,7 @@
   <joint name="joint2" type="revolute">
     <parent link="dynamixel1"/>
     <child link="dynamixel2"/>
-    <origin xyz="-0.01 0 0.02" rpy="0 1.5708 3.1416"/>
+    <origin xyz="-0.01 0 0.026" rpy="0 1.5708 3.1416"/>
     <axis xyz="0 0 1"/>                          <!-- roll : shaft along world X -->
     <limit lower="-2.61799" upper="2.61799" effort="1.5" velocity="6.0"/>
     <dynamixel id="2" model="AX-18A" home_deg="180" direction="-1"/>
@@ -98,7 +98,7 @@
   <joint name="joint3" type="revolute">
     <parent link="dynamixel2"/>
     <child link="dynamixel3"/>
-    <origin xyz="-0.0275 0.02 0.02" rpy="-1.5708 3.1416 0"/>
+    <origin xyz="-0.0275 0.02 0.015" rpy="-1.5708 3.1416 0"/>
     <axis xyz="0 0 1"/>                          <!-- pitch (shoulder) : shaft along world Y -->
     <limit lower="-2.61799" upper="2.61799" effort="1.5" velocity="6.0"/>
     <dynamixel id="3" model="AX-18A" home_deg="180" direction="-1"/>
@@ -126,7 +126,7 @@
   <joint name="tool_joint" type="fixed">
     <parent link="dynamixel5"/>
     <child link="phone_mount"/>
-    <origin xyz="0.08 0 0" rpy="0 0 0"/>
+    <origin xyz="0.057 0 0" rpy="0 0 0"/>
   </joint>
 
 </robot>

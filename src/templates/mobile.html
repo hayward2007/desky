@@ -57,7 +57,8 @@
   </section>
 
   <script>
-    const FRAME_INTERVAL_MS = 200; // ~5 fps, kept low for bandwidth
+    // const FRAME_INTERVAL_MS = 200; // ~5 fps, kept low for bandwidth
+    const FRAME_INTERVAL_MS = 66; // ~5 fps, kept low for bandwidth
     const JPEG_QUALITY = 0.6;
 
     const video = document.getElementById("preview");
@@ -153,7 +154,7 @@
         // continuously; the audio track only gets sent when the mic button
         // records a voice question (see the mic-btn click handler below).
         const stream = await navigator.mediaDevices.getUserMedia({
-          video: { facingMode: "environment" },
+          video: { facingMode: "user" },
           audio: true,
         });
         mediaStream = stream;

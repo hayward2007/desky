@@ -24,10 +24,11 @@ Run from the repository root:
     python -m webapp.app
 """
 
-import io
+import mediapipe as mp
 import numpy as np
 import threading
 import cv2
+import io
 
 import matplotlib
 matplotlib.use("Agg")  # headless: render arm previews to PNG, no display/window
@@ -247,6 +248,13 @@ def goto_joint():
     return jsonify({"ok": True})
 
 
+def initialize_position():
+    arm_ctrl.goto_position([0,0,0.3])
+    arm_ctrl.actuators[0].goto(180)
+    arm_ctrl.actuators[1].goto(180)
+    
+
+
 def run():
     """Serve the dashboard and show a local preview window of the phone's
     camera feed. Shared by `python -m webapp.app` and `python main.py` so
@@ -275,23 +283,57 @@ def run():
 
     Logger.log("CAMERA", "Press 'q' in the camera window (or Ctrl+C here) to quit")
     last_frame_count = 0
+    
+    initialize_position()
+    
+    mp_drawing = mp.solutions.drawing_utils
+    mp_hands = mp.solutions.hands
+
     try:
-        while True:
-            frame_bytes, frame_count = camera.snapshot()
-            # Only decode+show on a genuinely new frame — the phone only
-            # sends ~5 fps, but this loop spins far faster (waitKey(1) is a
-            # ~1ms cap, not a guarantee), so without this check it would
-            # needlessly re-decode and re-display the same bytes every spin.
-            if frame_bytes is not None and frame_count != last_frame_count:
-                last_frame_count = frame_count
-                frame = cv2.imdecode(np.frombuffer(frame_bytes, np.uint8), cv2.IMREAD_COLOR)
-                if frame is not None:
-                    cv2.imshow("Mobile camera", frame)
-            # waitKey both drives HighGUI's event loop (without it the window
-            # never actually renders/refreshes) and lets 'q'/Esc quit.
-            key = cv2.waitKey(1) & 0xFF
-            if key == ord("q") or key == 27:
-                break
+        with mp_hands.Hands(
+            static_image_mode=False,
+            max_num_hands=2,
+            min_detection_confidence=0.5,
+            min_tracking_confidence=0.5) as hands:
+            
+            while True:
+                frame_bytes, frame_count = camera.snapshot()
+                # Only decode+show on a genuinely new frame — the phone only
+                # sends ~5 fps, but this loop spins far faster (waitKey(1) is a
+                # ~1ms cap, not a guarantee), so without this check it would
+                # needlessly re-decode and re-display the same bytes every spin.
+                if frame_bytes is not None and frame_count != last_frame_count:
+                    last_frame_count = frame_count
+                    frame = cv2.imdecode(np.frombuffer(frame_bytes, np.uint8), cv2.IMREAD_COLOR)
+                    frame = cv2.rotate(frame, cv2.ROTATE_90_CLOCKWISE)
+                    
+                    
+                    image = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                    results = hands.process(frame)
+                    
+                    if results.multi_hand_landmarks:
+                        for hand_landmarks in results.multi_hand_landmarks:
+                            mp_drawing.draw_landmarks(
+                                frame, hand_landmarks, mp_hands.HAND_CONNECTIONS)
+                            
+                            # 엄지와 검지 손 끝 연결 후 거리 측정
+                            point_index = [0,1,5,17]
+                            first_point = hand_landmarks.landmark[0]
+                            points =  [ hand_landmarks.landmark[i] for i in point_index ]
+                            coords = [(int(i.x * frame.shape[1]), int(i.y * frame.shape[0])) for i in points]
+                            cv2.line(frame, coords[0], coords[1], (0, 255, 0), 2)
+                            cv2.line(frame, coords[1], coords[2], (0, 255, 0), 2)
+                            cv2.line(frame, coords[2], coords[3], (0, 255, 0), 2)
+                            cv2.line(frame, coords[3], coords[0], (0, 255, 0), 2)
+
+                    
+                    if frame is not None:
+                        cv2.imshow("Mobile camera", frame)
+                # waitKey both drives HighGUI's event loop (without it the window
+                # never actually renders/refreshes) and lets 'q'/Esc quit.
+                key = cv2.waitKey(1) & 0xFF
+                if key == ord("q") or key == 27:
+                    break
     except KeyboardInterrupt:
         pass
     finally:
