@@ -1,0 +1,15 @@
+# --- 필수 (웹 대시보드 + 모바일 페이지) ---------------------------------
+flask                 # src.app: HTTP 서버
+flask-sock            # src.app: /ws/camera raw WebSocket
+pyopenssl             # src.app: ssl_context="adhoc" 자체 서명 인증서 (getUserMedia에 HTTPS 필수)
+opencv-python         # perception/src.app: 프레임 디코드, 문서 검출, 카메라 미리보기 창
+numpy                 # opencv/mediapipe와 함께 사용
+matplotlib            # kinematics.simulate: 3D 렌더링 (웹 /api/render 포함)
+python-dotenv         # .env에서 DEVICE_NAME / GEMINI_API_KEY 로드
+
+# --- 하드웨어 제어 (실제 서보를 움직일 때만) -----------------------------
+dynamixel-sdk         # hardware: DYNAMIXEL Protocol 1.0 통신
+
+# --- AI 기능 (없으면 해당 기능만 비활성) ---------------------------------
+google-genai          # src.api.gemini: 채팅/요약/STT/문서 글자 읽기
+mediapipe             # perception.hand_tracker: 손 인식

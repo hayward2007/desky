@@ -16,20 +16,27 @@ the server tells the two apart by content (JPEG's SOI marker vs WebM's EBML
 header), transcribes voice clips via Gemini, and sends the transcript back
 over that same connection.
 
-Also exposes /api/ask: a Gemini-backed chat/summary endpoint. If GEMINI_API_KEY
-isn't set (or the google-genai package isn't installed), that route reports
-"not configured" instead of crashing the app, same as the hardware fallback.
+Also exposes /api/ask: a Gemini-backed chat/summary endpoint, and the
+/api/scan/* routes (perception.document_scanner.DocumentScanner + Gemini) that
+back /mobile's document-scan section: detect paper documents in the latest
+camera frame, freeze a snapshot, and read the selected one aloud/verbatim. If
+GEMINI_API_KEY isn't set (or the google-genai package isn't installed), those
+routes report "not configured" instead of crashing the app, same as the
+hardware fallback.
+
+Hand tracking (perception.hand_tracker.HandTracker) runs in run()'s local
+preview loop, not as a Flask route — it overlays mediapipe hand landmarks on
+the desktop camera window and places them in the 3D scene via the arm's
+current end-effector transform.
 
 Run from the repository root:
     python -m webapp.app
 """
 
-import mediapipe as mp
 import numpy as np
 import threading
 import cv2
 import io
-import math
 import time
 
 import matplotlib
@@ -43,8 +50,11 @@ from flask_sock import Sock
 from kinematics.urdf_loader import load_arm, _DEFAULT_URDF_PATH
 from kinematics.simulate import parse_urdf, draw_pose, draw_points, workspace_bounds
 from logger import Logger
-from src.api.gemini import Gemini
+from perception.document_scanner import DocumentScanner
+from perception.hand_tracker import HandTracker
 from src.api.camera import Camera
+from src.api.gemini import Gemini
+from src.api.scan import ScanAPI
 
 try:
     # Optional: only needed to read GEMINI_API_KEY (and hardware's .env vars)
@@ -115,57 +125,10 @@ def _current_q():
     return _q_cache["q"]
 
 
-# Assumed pinhole focal length in image-WIDTH-normalized units (i.e. a point at
-# distance `d` with real-world offset `o` perpendicular to the optical axis
-# lands at normalized offset o / (d / _CAMERA_FOCAL_NORM) from center). ~1.0
-# corresponds to a ~53 deg horizontal FOV, a reasonable phone-camera ballpark.
-# There's no real calibration here, so hand distances below are an estimate,
-# not a measurement.
-_CAMERA_FOCAL_NORM = 1.0
-_HAND_WRIST_TO_THUMB_CMC_M = 0.035  # landmark 0 (wrist) -> landmark 1 (thumb CMC)
-
-
-def _hand_depth_m(landmarks, frame_width, frame_height):
-    """Estimate one hand's distance from the camera (meters) from how large it
-    appears on screen: a hand that looks smaller is farther away, not shrunk.
-    Assumes the real wrist(0)->thumb-CMC(1) span is _HAND_WRIST_TO_THUMB_CMC_M
-    and inverts the pinhole projection (apparent_size = focal * real_size /
-    distance) to solve for distance.
-    """
-    wrist, thumb_cmc = landmarks[0], landmarks[1]
-    dx = (thumb_cmc.x - wrist.x) * frame_width
-    dy = (thumb_cmc.y - wrist.y) * frame_height
-    apparent = math.hypot(dx, dy) / frame_width
-    apparent = max(apparent, 1e-4)  # guard against a degenerate (near-zero) detection
-    return _CAMERA_FOCAL_NORM * _HAND_WRIST_TO_THUMB_CMC_M / apparent
-
-
-def _hand_landmark_to_world(landmark, T_ee, depth):
-    """Place one mediapipe hand landmark in world coordinates, assuming the
-    phone's camera sits at the end-effector and looks along its local +X (the
-    same direction as the URDF tool offset). `depth` is the whole hand's
-    estimated distance from the camera (see _hand_depth_m) — at that distance
-    a normalized image offset of `o` corresponds to a real offset of
-    `o * depth / _CAMERA_FOCAL_NORM`, so as the hand moves away it gets placed
-    farther back along the optical axis while its reconstructed size stays
-    ~_HAND_WRIST_TO_THUMB_CMC_M instead of shrinking the way it does in the raw
-    2D image. landmark.z (mediapipe's relative depth within the hand) is
-    scaled the same way for finger-to-finger depth (e.g. a curled finger).
-    """
-    scale = depth / _CAMERA_FOCAL_NORM
-    right = (landmark.x - 0.5) * scale
-    down = (landmark.y - 0.5) * scale
-    forward = depth + landmark.z * scale
-    # Points came out rotated 90deg clockwise; rotate the (right, down) plane
-    # 90deg counter-clockwise to correct it: (right, down) -> (down, -right).
-    right, down = down, -right
-    x, y, z = forward, -right, -down
-    return (T_ee[0][0] * x + T_ee[0][1] * y + T_ee[0][2] * z + T_ee[0][3],
-            T_ee[1][0] * x + T_ee[1][1] * y + T_ee[1][2] * z + T_ee[1][3],
-            T_ee[2][0] * x + T_ee[2][1] * y + T_ee[2][2] * z + T_ee[2][3])
-
 gemini = Gemini()
 camera = Camera(gemini)
+scanner = DocumentScanner()
+scan_api = ScanAPI(camera, scanner, gemini)
 
 
 @app.route("/")
@@ -203,6 +166,9 @@ app.route("/api/ask", methods=["POST"], endpoint="ask")(gemini.ask)
 sock.route("/ws/camera")(camera.ws_camera)
 app.route("/api/camera/latest.jpg", endpoint="camera_latest_frame")(camera.latest_frame)
 app.route("/api/camera/status", endpoint="camera_status")(camera.status)
+app.route("/api/scan/preview.jpg", endpoint="scan_preview")(scan_api.preview)
+app.route("/api/scan/detect", endpoint="scan_detect")(scan_api.detect)
+app.route("/api/scan/parse", methods=["POST"], endpoint="scan_parse")(scan_api.parse)
 
 
 @app.route("/api/goto_position", methods=["POST"])
@@ -387,9 +353,10 @@ def goto_joint():
 
 
 def initialize_position():
-    arm_ctrl.goto_position([0,0,0.3])
-    arm_ctrl.actuators[0].goto(180)
-    arm_ctrl.actuators[1].goto(180)
+    # arm_ctrl.goto_position([0,0,0.3])
+    # arm_ctrl.actuators[0].goto(180)
+    # arm_ctrl.actuators[1].goto(180)
+    pass
     
 
 
@@ -421,11 +388,13 @@ def run():
 
     Logger.log("CAMERA", "Press 'q' in the camera window (or Ctrl+C here) to quit")
     last_frame_count = 0
-    
+
     initialize_position()
-    
-    mp_drawing = mp.solutions.drawing_utils
-    mp_hands = mp.solutions.hands
+
+    # perception.hand_tracker.HandTracker wraps mediapipe: if mediapipe isn't
+    # installed, `tracker.available` is False and process()/draw_overlay() are
+    # no-ops, so the camera window still runs without hand detection.
+    tracker = HandTracker(max_num_hands=2, min_detection_confidence=0.5, min_tracking_confidence=0.5)
 
     # Persistent 3D scene (robot + hand overlay), rendered off-screen (Agg,
     # same as /api/render) and shown via cv2 so it doesn't fight the module's
@@ -436,82 +405,46 @@ def run():
     ax3d.view_init(elev=22, azim=-55)
 
     try:
-        with mp_hands.Hands(
-            static_image_mode=False,
-            max_num_hands=2,
-            min_detection_confidence=0.5,
-            min_tracking_confidence=0.5) as hands:
+        while True:
+            frame_bytes, frame_count = camera.snapshot()
+            # Only decode+show on a genuinely new frame — the phone only
+            # sends ~5 fps, but this loop spins far faster (waitKey(1) is a
+            # ~1ms cap, not a guarantee), so without this check it would
+            # needlessly re-decode and re-display the same bytes every spin.
+            if frame_bytes is not None and frame_count != last_frame_count:
+                last_frame_count = frame_count
+                frame = cv2.imdecode(np.frombuffer(frame_bytes, np.uint8), cv2.IMREAD_COLOR)
+                frame = cv2.rotate(frame, cv2.ROTATE_90_CLOCKWISE)
 
-            while True:
-                frame_bytes, frame_count = camera.snapshot()
-                # Only decode+show on a genuinely new frame — the phone only
-                # sends ~5 fps, but this loop spins far faster (waitKey(1) is a
-                # ~1ms cap, not a guarantee), so without this check it would
-                # needlessly re-decode and re-display the same bytes every spin.
-                if frame_bytes is not None and frame_count != last_frame_count:
-                    last_frame_count = frame_count
-                    frame = cv2.imdecode(np.frombuffer(frame_bytes, np.uint8), cv2.IMREAD_COLOR)
-                    frame = cv2.rotate(frame, cv2.ROTATE_90_CLOCKWISE)
+                q = _current_q() or [0.0] * len(arm.joints)
+                T_ee = arm.fk_matrix(q)
 
+                rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                hands = tracker.process(rgb, T_ee, frame.shape)
+                tracker.draw_overlay(frame, hands)
 
-                    image = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                    results = hands.process(image)
+                if frame is not None:
+                    cv2.imshow("Mobile camera", frame)
 
-                    q = _current_q() or [0.0] * len(arm.joints)
-                    T_ee = arm.fk_matrix(q)
-
-                    hand_world_point_sets = []
-                    if results.multi_hand_landmarks:
-                        for hand_landmarks in results.multi_hand_landmarks:
-                            mp_drawing.draw_landmarks(
-                                frame, hand_landmarks, mp_hands.HAND_CONNECTIONS)
-
-                            # 엄지와 검지 손 끝 연결 후 거리 측정
-                            point_index = [0,1,5,17]
-                            first_point = hand_landmarks.landmark[0]
-                            points =  [ hand_landmarks.landmark[i] for i in point_index ]
-                            coords = [(int(i.x * frame.shape[1]), int(i.y * frame.shape[0])) for i in points]
-                            cv2.line(frame, coords[0], coords[1], (0, 255, 0), 2)
-                            cv2.line(frame, coords[1], coords[2], (0, 255, 0), 2)
-                            cv2.line(frame, coords[2], coords[3], (0, 255, 0), 2)
-                            cv2.line(frame, coords[3], coords[0], (0, 255, 0), 2)
-
-
-                            # point = tuple((a + b) / 2 for a, b in zip(coords[0], coords[2]))
-
-                            # cv2.circle(frame, point, radius=2, color=(0, 255, 0), thickness=-1)
-
-                            # Bigger on screen -> closer, not "bigger" -- recover a real
-                            # distance from apparent size (see _hand_depth_m) so the hand
-                            # moves back in 3D as it shrinks on screen, instead of just
-                            # shrinking in place.
-                            depth = _hand_depth_m(hand_landmarks.landmark, frame.shape[1], frame.shape[0])
-                            hand_world_point_sets.append([
-                                _hand_landmark_to_world(lm, T_ee, depth)
-                                for lm in hand_landmarks.landmark
-                            ])
-
-                    if frame is not None:
-                        cv2.imshow("Mobile camera", frame)
-
-                    # 3D scene: current robot pose plus any detected hand(s),
-                    # placed relative to the end-effector (the phone/camera
-                    # mount) via forward kinematics.
-                    draw_pose(ax3d, arm, _root_link, _chain, _visuals, q, _render_bounds)
-                    for world_points in hand_world_point_sets:
-                        draw_points(ax3d, world_points, mp_hands.HAND_CONNECTIONS)
-                    canvas3d.draw()
-                    scene = cv2.cvtColor(np.asarray(canvas3d.buffer_rgba()), cv2.COLOR_RGBA2BGR)
-                    cv2.imshow("3D scene (robot + hand)", scene)
-                # waitKey both drives HighGUI's event loop (without it the window
-                # never actually renders/refreshes) and lets 'q'/Esc quit.
-                key = cv2.waitKey(1) & 0xFF
-                if key == ord("q") or key == 27:
-                    break
+                # 3D scene: current robot pose plus any detected hand(s),
+                # placed relative to the end-effector (the phone/camera
+                # mount) via forward kinematics.
+                draw_pose(ax3d, arm, _root_link, _chain, _visuals, q, _render_bounds)
+                for hand in hands:
+                    draw_points(ax3d, hand.world_points, tracker.connections)
+                canvas3d.draw()
+                scene = cv2.cvtColor(np.asarray(canvas3d.buffer_rgba()), cv2.COLOR_RGBA2BGR)
+                cv2.imshow("3D scene (robot + hand)", scene)
+            # waitKey both drives HighGUI's event loop (without it the window
+            # never actually renders/refreshes) and lets 'q'/Esc quit.
+            key = cv2.waitKey(1) & 0xFF
+            if key == ord("q") or key == 27:
+                break
     except KeyboardInterrupt:
         pass
     finally:
         cv2.destroyAllWindows()
+        tracker.close()
 
 
 if __name__ == "__main__":
