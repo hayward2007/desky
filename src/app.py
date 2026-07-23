@@ -24,10 +24,23 @@ GEMINI_API_KEY isn't set (or the google-genai package isn't installed), those
 routes report "not configured" instead of crashing the app, same as the
 hardware fallback.
 
-Hand tracking (perception.hand_tracker.HandTracker) runs in run()'s local
-preview loop, not as a Flask route — it overlays mediapipe hand landmarks on
-the desktop camera window and places them in the 3D scene via the arm's
-current end-effector transform.
+Hand tracking (perception.hand_tracker.HandTracker/HandFollower) and face
+tracking (perception.face_tracker.FaceTracker/FaceFollower) both run in
+run()'s local preview loop, not as Flask routes — same detect → overlay →
+place-in-3D-scene → (optionally) compute a follow command pipeline for each.
+Hand-follow is currently disabled (HAND_FOLLOW_ENABLED = False below) — the
+objects are still built and hands are still drawn, but nothing commands the
+arm from them; re-enable the flag to bring it back. Face-follow
+(FaceFollower) is the active one: it tracks the primary face's screen-center
+offset and depth, and, once the offset passes a dead-zone threshold, picks
+one of two responses depending on distance — closer than
+FaceFollower.NEAR_DISTANCE_M, a full 3D end-effector target (fully re-centered
+sideways/up-down, partially corrected in depth, via arm_ctrl.goto_position);
+at or beyond it (the normal desk-distance case), the arm instead holds the
+IK-solved pose for FaceFollower.HOME_POSITION and only joint 1 (yaw) is
+nudged to keep facing the face, via arm_ctrl.goto_joints. run() is the only
+place that actually commands hardware from either follower's output — neither
+follower itself has a hardware dependency.
 
 Run from the repository root:
     python -m webapp.app
@@ -48,10 +61,11 @@ from flask import Flask, Response, jsonify, render_template, request
 from flask_sock import Sock
 
 from kinematics.urdf_loader import load_arm, _DEFAULT_URDF_PATH
-from kinematics.simulate import parse_urdf, draw_pose, draw_points, workspace_bounds
+from kinematics.simulate import parse_urdf, draw_pose, workspace_bounds
 from logger import Logger
 from perception.document_scanner import DocumentScanner
-from perception.hand_tracker import HandTracker
+from perception.face_tracker import FaceTracker, FaceFollower
+from perception.hand_tracker import HandTracker, HandFollower
 from src.api.camera import Camera
 from src.api.gemini import Gemini
 from src.api.scan import ScanAPI
@@ -97,7 +111,7 @@ _root_link, _chain, _visuals = parse_urdf(_DEFAULT_URDF_PATH)
 _render_bounds = workspace_bounds(arm, _root_link, _chain, _visuals)
 
 
-_Q_CACHE_TTL = 0.5  # seconds
+_Q_CACHE_TTL = 3.0  # seconds
 _q_cache = {"q": None, "t": 0.0}
 
 
@@ -109,8 +123,12 @@ def _current_q():
     readback is its own DYNAMIXEL serial round trip x5 joints. Without this
     shared cache the two call sites would independently re-read all 5
     actuators far more often than the arm's pose actually changes, flooding
-    the serial bus. Returns None if there's no hardware, or the very first
-    read fails (a later failure just keeps serving the stale cached pose).
+    the serial bus. TTL is a few seconds (not sub-second) on purpose: the 3D
+    overlay and HandFollower's "which way am I currently facing" direction
+    don't need fresher-than-that pose data, and every cache miss is 5 blocking
+    serial round trips, so a short TTL was making this the hot path. Returns
+    None if there's no hardware, or the very first read fails (a later
+    failure just keeps serving the stale cached pose).
     """
     if arm_ctrl is None:
         return None
@@ -357,7 +375,14 @@ def initialize_position():
     # arm_ctrl.actuators[0].goto(180)
     # arm_ctrl.actuators[1].goto(180)
     pass
-    
+
+
+# Hand tracking/following is parked for now in favor of face tracking/
+# following (see run()) — the HandTracker/HandFollower objects are still
+# built (so the whole feature stays intact as a unit), but the per-frame
+# detect/draw/follow pipeline is skipped entirely while this is False. Flip
+# it back on to resume hand-based following.
+HAND_FOLLOW_ENABLED = False
 
 
 def run():
@@ -393,12 +418,21 @@ def run():
 
     # perception.hand_tracker.HandTracker wraps mediapipe: if mediapipe isn't
     # installed, `tracker.available` is False and process()/draw_overlay() are
-    # no-ops, so the camera window still runs without hand detection.
+    # no-ops, so the camera window still runs without hand detection. Built
+    # regardless of HAND_FOLLOW_ENABLED so the feature stays intact as an
+    # object even while parked (see the flag's comment above).
     tracker = HandTracker(max_num_hands=2, min_detection_confidence=0.5, min_tracking_confidence=0.5)
+    follower = HandFollower()
 
-    # Persistent 3D scene (robot + hand overlay), rendered off-screen (Agg,
-    # same as /api/render) and shown via cv2 so it doesn't fight the module's
-    # Agg backend or need a second GUI event loop on the main thread.
+    # perception.face_tracker.FaceTracker/FaceFollower — same pattern as the
+    # hand tracker, currently the active follow behavior (see run()'s
+    # docstring for the near/far distance split).
+    face_tracker = FaceTracker(max_num_faces=1, min_detection_confidence=0.5, min_tracking_confidence=0.5)
+    face_follower = FaceFollower(arm=arm)
+
+    # Persistent 3D scene (robot + hand/face overlay), rendered off-screen
+    # (Agg, same as /api/render) and shown via cv2 so it doesn't fight the
+    # module's Agg backend or need a second GUI event loop on the main thread.
     fig3d = Figure(figsize=(6, 6))
     canvas3d = FigureCanvasAgg(fig3d)
     ax3d = fig3d.add_subplot(111, projection="3d", computed_zorder=False)
@@ -420,32 +454,47 @@ def run():
 
                 q = _current_q() or [0.0] * len(arm.joints)
                 T_ee = arm.fk_matrix(q)
-
                 rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                hands = tracker.process(rgb, T_ee, frame.shape)
-                tracker.draw_overlay(frame, hands)
+
+                hands = []
+                if HAND_FOLLOW_ENABLED:
+                    hands = tracker.process(rgb, T_ee, frame.shape)
+                    tracker.draw_overlay(frame, hands)
+
+                faces = face_tracker.process(rgb, T_ee, frame.shape)
+                face_tracker.draw_overlay(frame, faces)
 
                 if frame is not None:
                     cv2.imshow("Mobile camera", frame)
 
-                # 3D scene: current robot pose plus any detected hand(s),
+                # 3D scene: current robot pose plus any detected hand(s)/face,
                 # placed relative to the end-effector (the phone/camera
                 # mount) via forward kinematics.
                 draw_pose(ax3d, arm, _root_link, _chain, _visuals, q, _render_bounds)
-                # end-effector가 실제로 카메라가 본다고 가정하는 방향(T_ee의
-                # 로컬 +Y 열벡터, perception.hand_tracker.forward_axis와 동일한
-                # 정의 — 실측으로 확인: 모든 관절 서보각 180도일 때 world +Z를
-                # 가리켜야 함)을 그려 hand_tracker의 가정이 맞는지 눈으로 확인한다.
-                ee_x, ee_y, ee_z = T_ee[0][3], T_ee[1][3], T_ee[2][3]
-                fwd_x, fwd_y, fwd_z = T_ee[0][1], T_ee[1][1], T_ee[2][1]
-                arrow_len = _render_bounds[3] * 0.25
-                ax3d.quiver(ee_x, ee_y, ee_z, fwd_x * arrow_len, fwd_y * arrow_len, fwd_z * arrow_len,
-                            color="cyan", linewidth=2.5, arrow_length_ratio=0.25, zorder=11)
-                for hand in hands:
-                    draw_points(ax3d, hand.world_points, tracker.connections)
+                tracker.draw_forward_axis_debug(ax3d, T_ee, _render_bounds[3] * 0.25)
+                if HAND_FOLLOW_ENABLED:
+                    tracker.draw_hands_3d(ax3d, hands)
+                face_tracker.draw_faces_3d(ax3d, faces)
                 canvas3d.draw()
                 scene = cv2.cvtColor(np.asarray(canvas3d.buffer_rgba()), cv2.COLOR_RGBA2BGR)
-                cv2.imshow("3D scene (robot + hand)", scene)
+                cv2.imshow("3D scene (robot + hand/face)", scene)
+
+                if arm_ctrl is not None:
+                    # Hand-follow: parked (see HAND_FOLLOW_ENABLED above).
+                    if HAND_FOLLOW_ENABLED:
+                        target = follower.next_ee_target(hands, T_ee)
+                        if target is not None:
+                            arm_ctrl.goto_position(target)
+
+                    # Face-follow: FaceFollower decides WHERE, WHEN, and HOW
+                    # (full 3D reposition vs. yaw-only) — see its docstring.
+                    command = face_follower.next_command(faces, T_ee, q)
+                    if command is not None:
+                        kind, payload = command
+                        if kind == "position":
+                            arm_ctrl.goto_position(payload)
+                        elif kind == "joints":
+                            arm_ctrl.goto_joints(payload)
             # waitKey both drives HighGUI's event loop (without it the window
             # never actually renders/refreshes) and lets 'q'/Esc quit.
             key = cv2.waitKey(1) & 0xFF
@@ -456,6 +505,7 @@ def run():
     finally:
         cv2.destroyAllWindows()
         tracker.close()
+        face_tracker.close()
 
 
 if __name__ == "__main__":

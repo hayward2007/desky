@@ -20,7 +20,7 @@ class Actuator:
         Logger.log("ACTUATOR", f"ID {self.id} initialized (model={model})")
         self.controller.set_speed(self.id, self.__MIN_SPEED, self.control_table)
 
-    def goto(self, degree: float, speed: float = 10):
+    def goto(self, degree: float, speed: float = 5):
         Logger.log("ACTUATOR", f"ID {self.id} goto degree={degree} speed={speed}")
         self.controller.set_speed(self.id, speed, self.control_table)
         time.sleep(self.__TIME_INTERVAL)
@@ -48,7 +48,7 @@ class ArmController:
             raise ValueError(f"Missing actuators for joint id(s): {missing}")
         self.actuators = [by_id[joint.id] for joint in self.arm.joints]
 
-    def goto_position(self, target_pos, target_rot=None, speed: float = 10, seed=None):
+    def goto_position(self, target_pos, target_rot=None, speed: float = 5, seed=None):
         """Solve IK for `target_pos` and drive every actuator to the result.
 
         Returns (q, converged) from kinematics.Arm.ik. Leaves the actuators
@@ -66,7 +66,7 @@ class ArmController:
             actuator.goto(deg, speed=speed)
         return q, converged
 
-    def goto_joints(self, servo_degs, speed: float = 10):
+    def goto_joints(self, servo_degs, speed: float = 5):
         """FK-style control: command EVERY actuator to a given servo angle and
         return the resulting end-effector position via forward kinematics.
 
