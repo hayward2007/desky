@@ -138,23 +138,38 @@ class HandTracker:
     def landmark_to_world(self, landmark, T_ee, depth) -> tuple:
         """랜드마크 하나를 월드 좌표 (x, y, z)로 변환한다.
 
-        휴대폰 카메라가 end-effector에 붙어 로컬 +X 방향(= URDF의 tool offset
-        방향)을 본다고 가정한다. 거리 `depth`에서 정규화 화면 오프셋 o는 실제
-        오프셋 o * depth / FOCAL_NORM에 대응하므로, 손이 멀어지면 화면에서
-        작아지는 대신 3D 상에서 뒤로 밀려나고 크기는 그대로 유지된다.
-        landmark.z(손 안에서의 상대 깊이, 예: 구부린 손가락)도 같은 배율로 스케일.
+        T_ee의 회전행렬 열벡터를 그대로 end-effector 로컬 축의 월드 방향으로
+        쓴다: forward_axis(로컬 +Y = 카메라가 실제로 보는 방향 — 실측으로 확인:
+        모든 관절이 서보각 180도일 때 이 벡터가 world +Z를 가리켜야 함),
+        up_axis(로컬 +X), side_axis(로컬 +Z). 손 랜드마크가 놓이는 평면은 항상
+        origin + forward * forward_axis를 지나고 forward_axis에 수직이므로,
+        그 평면의 방향벡터(법선)는 정확히 end-effector의 방향벡터와 같다 —
+        팔이 회전하면 손 평면도 그대로 같이 회전한다. 화면 중심(landmark
+        (0.5, 0.5))의 점은 항상 이 forward_axis 직선 위에 정확히 놓인다.
+
+        landmark.z(손 안에서의 상대 깊이, 예: 구부린 손가락)는 이 랜드마크만의
+        forward 거리를 조정하고, screen_right/screen_down도 공유된 depth가
+        아니라 그 forward 거리 기준으로 다시 스케일해 핀홀 투영과 일치시킨다.
         """
+        forward_axis = (T_ee[0][1], T_ee[1][1], T_ee[2][1])
+        up_axis = (T_ee[0][0], T_ee[1][0], T_ee[2][0])
+        side_axis = (T_ee[0][2], T_ee[1][2], T_ee[2][2])
+        origin = (T_ee[0][3], T_ee[1][3], T_ee[2][3])
+
         scale = depth / self.FOCAL_NORM
-        right = (landmark.x - 0.5) * scale
-        down = (landmark.y - 0.5) * scale
         forward = depth + landmark.z * scale
-        # 결과가 시계방향 90도 돌아간 채로 나와서, (right, down) 평면을
-        # 반시계 90도 회전해 보정한다: (right, down) -> (down, -right)
-        right, down = down, -right
-        x, y, z = forward, -right, -down
-        return (T_ee[0][0] * x + T_ee[0][1] * y + T_ee[0][2] * z + T_ee[0][3],
-                T_ee[1][0] * x + T_ee[1][1] * y + T_ee[1][2] * z + T_ee[1][3],
-                T_ee[2][0] * x + T_ee[2][1] * y + T_ee[2][2] * z + T_ee[2][3])
+        scale_at_forward = forward / self.FOCAL_NORM
+        screen_right = (landmark.x - 0.5) * scale_at_forward
+        screen_down = (landmark.y - 0.5) * scale_at_forward
+
+        # 화면 <-> 로컬 축 매핑: forward_axis를 축으로 시계방향 90도 회전 보정
+        # (카메라 시점, 즉 forward_axis 바깥쪽을 내다보는 기준):
+        # screen_right -> -side_axis, screen_down -> +up_axis.
+        return tuple(
+            origin[i] + forward * forward_axis[i]
+            + screen_down * up_axis[i] - screen_right * side_axis[i]
+            for i in range(3)
+        )
 
     # ------------------------------------------------------------------
     # 시각화

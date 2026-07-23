@@ -487,7 +487,7 @@
   /* =====================================================================
      1. 카메라 스트리밍 — 페이지를 열면 자동으로 시작한다.
      ===================================================================== */
-  const FRAME_INTERVAL_MS = 200;   // 약 5fps
+  const FRAME_INTERVAL_MS = 66;   // 약 20fps
   const JPEG_QUALITY = 0.6;
 
   const video     = document.getElementById("preview");
@@ -552,7 +552,7 @@
     const stageWidth = stageEl.clientWidth, stageHeight = stageEl.clientHeight;
     video.style.width  = (swap ? stageHeight : stageWidth) + "px";
     video.style.height = (swap ? stageWidth : stageHeight) + "px";
-    video.style.transform = `translate(-50%, -50%) rotate(${currentRotation}deg)`;
+    video.style.transform = `translate(-50%, -50%) scaleX(-1) rotate(${currentRotation}deg)`;
   }
 
   video.addEventListener("loadedmetadata", layoutPreview);
@@ -595,6 +595,7 @@
     ctx.save();
     ctx.translate(outW / 2, outH / 2);
     ctx.rotate(currentRotation * Math.PI / 180);
+    ctx.scale(-1, 1);
     ctx.drawImage(video, -vw / 2, -vh / 2, vw, vh);
     ctx.restore();
     canvas.toBlob((blob) => {
@@ -620,7 +621,7 @@
     setStatus("카메라 권한 요청 중");
     try {
       mediaStream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: "environment" }, audio: false,
+        video: { facingMode: { exact: "user" } }, audio: false,
       });
       video.srcObject = mediaStream;
       connectSocket();

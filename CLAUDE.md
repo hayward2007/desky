@@ -181,9 +181,11 @@ python main.py   # 저장소 루트에서 실행, https://localhost:8000
 
 팔 끝(end-effector)에 장착된 휴대폰에서 `https://<이 서버의 LAN IP>:8000/mobile`을 열면:
 
-1. "Start camera + streaming" 버튼을 누르면 `getUserMedia({video: {facingMode: "environment"},
-   audio: false})`로 후면 카메라 권한만 요청한다(음성 대화는 브라우저 내장
-   `SpeechRecognition`이 별도로 마이크 권한을 요청 — 아래 음성 대화 절 참고).
+1. "Start camera + streaming" 버튼을 누르면 `getUserMedia({video: {facingMode: {exact: "user"}},
+   audio: false})`로 전면 카메라 권한만 요청한다(마운트 구조상 전면 카메라만 써야 하므로
+   `exact`로 강제 — 전면 카메라가 없으면 조용히 후면으로 넘어가는 대신 `OverconstrainedError`로
+   바로 실패한다. 음성 대화는 브라우저 내장 `SpeechRecognition`이 별도로 마이크 권한을 요청 —
+   아래 음성 대화 절 참고).
 2. 승인되면 `<video>`로 로컬 프리뷰를 띄우고, 200ms(≈5fps)마다 `<canvas>`에 프레임을 그려
    `canvas.toBlob('image/jpeg')`로 JPEG를 만들어 `wss://<host>/ws/camera`로 바이너리 그대로
    전송한다. 프레임마다 완결된 JPEG라서 서버는 컨테이너/코덱을 신경 쓸 필요가 없다.

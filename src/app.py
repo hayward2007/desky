@@ -432,6 +432,15 @@ def run():
                 # placed relative to the end-effector (the phone/camera
                 # mount) via forward kinematics.
                 draw_pose(ax3d, arm, _root_link, _chain, _visuals, q, _render_bounds)
+                # end-effector가 실제로 카메라가 본다고 가정하는 방향(T_ee의
+                # 로컬 +Y 열벡터, perception.hand_tracker.forward_axis와 동일한
+                # 정의 — 실측으로 확인: 모든 관절 서보각 180도일 때 world +Z를
+                # 가리켜야 함)을 그려 hand_tracker의 가정이 맞는지 눈으로 확인한다.
+                ee_x, ee_y, ee_z = T_ee[0][3], T_ee[1][3], T_ee[2][3]
+                fwd_x, fwd_y, fwd_z = T_ee[0][1], T_ee[1][1], T_ee[2][1]
+                arrow_len = _render_bounds[3] * 0.25
+                ax3d.quiver(ee_x, ee_y, ee_z, fwd_x * arrow_len, fwd_y * arrow_len, fwd_z * arrow_len,
+                            color="cyan", linewidth=2.5, arrow_length_ratio=0.25, zorder=11)
                 for hand in hands:
                     draw_points(ax3d, hand.world_points, tracker.connections)
                 canvas3d.draw()
