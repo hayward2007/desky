@@ -27,7 +27,8 @@ import math
 
 from kinematics.simulate import draw_points
 from kinematics.urdf_loader import load_arm
-from logger import Logger
+from fundamental.const import FaceTrackerConst, FaceFollowerConst
+from fundamental.logger import Logger
 from perception.camera_geometry import camera_frame, clamp_xy
 
 
@@ -51,16 +52,12 @@ class FaceTracker:
     `available`이 False가 되고 `process()`는 항상 빈 리스트를 돌려준다.
     """
 
-    FOCAL_NORM = 1.0
-
-    # 양쪽 눈 바깥쪽 끝(landmark 33=오른쪽, 263=왼쪽) 사이 실제 거리 추정치.
-    # 실측 캘리브레이션 값이 아니므로 거리 추정은 참고치 — HandTracker의
-    # WRIST_TO_THUMB_CMC_M와 같은 방식(핀홀 역산의 기준자).
-    EYE_OUTER_DISTANCE_M = 0.09
-    LEFT_EYE_OUTER = 33
-    RIGHT_EYE_OUTER = 263
-    # 얼굴 중심으로 쓰는 랜드마크 — FaceMesh 표준 index, 코끝 근처.
-    CENTER_LANDMARK = 1
+    # 상수 설명은 fundamental.const.FaceTrackerConst 참고.
+    FOCAL_NORM = FaceTrackerConst.FOCAL_NORM
+    EYE_OUTER_DISTANCE_M = FaceTrackerConst.EYE_OUTER_DISTANCE_M
+    LEFT_EYE_OUTER = FaceTrackerConst.LEFT_EYE_OUTER
+    RIGHT_EYE_OUTER = FaceTrackerConst.RIGHT_EYE_OUTER
+    CENTER_LANDMARK = FaceTrackerConst.CENTER_LANDMARK
 
     def __init__(self, max_num_faces=1, min_detection_confidence=0.6,
                  min_tracking_confidence=0.6):
@@ -197,19 +194,12 @@ class FaceFollower:
     `goto_joints`에 넘겨야 로봇이 실제로 움직인다.
     """
 
-    CENTER_OFFSET_THRESHOLD = 0.15
-    # 화면 좌우 오프셋(대략 -0.5~0.5)을 1번 관절 각도 보정량(rad)으로 바꾸는
-    # 비례 이득 — 실측으로 튜닝 필요.
-    YAW_GAIN = 0.8
-    # 한 번의 갱신에서 1번 관절이 움직일 수 있는 최대 각도(rad) — 큰 오프셋이
-    # 갑자기 튀어도 로봇이 한 번에 확 돌지 않도록 하는 안전판.
-    YAW_STEP_LIMIT = math.radians(20)
-    # 화면 상하 오프셋(대략 -0.5~0.5)을 높이(z) 보정량(m)으로 바꾸는 비례
-    # 이득 — 실측으로 튜닝 필요.
-    HEIGHT_GAIN = 0.2
-    # 한 번의 갱신에서 높이(z)가 움직일 수 있는 최대 거리(m) — YAW_STEP_LIMIT과
-    # 같은 이유의 안전판.
-    HEIGHT_STEP_LIMIT = 0.03
+    # 상수 설명은 fundamental.const.FaceFollowerConst 참고.
+    CENTER_OFFSET_THRESHOLD = FaceFollowerConst.CENTER_OFFSET_THRESHOLD
+    YAW_GAIN = FaceFollowerConst.YAW_GAIN
+    YAW_STEP_LIMIT = FaceFollowerConst.YAW_STEP_LIMIT
+    HEIGHT_GAIN = FaceFollowerConst.HEIGHT_GAIN
+    HEIGHT_STEP_LIMIT = FaceFollowerConst.HEIGHT_STEP_LIMIT
 
     def __init__(self, arm=None, center_offset_threshold=CENTER_OFFSET_THRESHOLD,
                  yaw_gain=YAW_GAIN, yaw_step_limit=YAW_STEP_LIMIT,

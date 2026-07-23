@@ -41,12 +41,13 @@ from mpl_toolkits.mplot3d.art3d import Poly3DCollection
 
 from .kinematics import _matmul, _translate, _rpy, _rot_axis
 from .urdf_loader import load_arm, _DEFAULT_URDF_PATH
-from logger import Logger
+from fundamental.const import SimulateConst
+from fundamental.logger import Logger
 
 # Box faces are always emitted in this order; index i -> label (i+1).
-FACE_NAMES = ["+Z (top)", "-Z (bottom)", "+X", "-X", "+Y", "-Y"]
-FACE_COLORS = ["#e6194b", "#3cb44b", "#4363d8", "#f58231", "#911eb4", "#42d4f4"]
-CYLINDER_COLOR = "#9e9e9e"
+FACE_NAMES = SimulateConst.FACE_NAMES
+FACE_COLORS = SimulateConst.FACE_COLORS
+CYLINDER_COLOR = SimulateConst.CYLINDER_COLOR
 
 
 # ---------------------------------------------------------------------------

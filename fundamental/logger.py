@@ -1,7 +1,7 @@
 """Project-wide console logger. Format: [TAG] message.
 
 Usage:
-    from logger import Logger
+    from fundamental.logger import Logger
     Logger.log("CONTROLLER", "Succeeded to open the port")
     # -> [CONTROLLER] Succeeded to open the port
 

@@ -10,7 +10,7 @@ reachable. Also opens a local cv2 preview window of the phone's camera feed
 (see webapp.app.run for why) — press 'q' in that window or Ctrl+C here to quit.
 """
 
-from logger import Logger
+from fundamental.logger import Logger
 from src.app import run
 
 Logger.enabled = True  # attach logging for this run; set False to silence

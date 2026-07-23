@@ -19,7 +19,8 @@ end-effector 좌표계 → 월드 좌표계로 변환한다. 그러면 로봇팔
 import math
 
 from kinematics.simulate import draw_points
-from logger import Logger
+from fundamental.const import HandTrackerConst, HandFollowerConst
+from fundamental.logger import Logger
 from perception.camera_geometry import camera_frame as _camera_frame
 from perception.camera_geometry import clamp_xy as _clamp_xy
 
@@ -51,17 +52,10 @@ class HandTracker:
     같은 "기능만 빠지고 앱은 계속 뜬다" 패턴.
     """
 
-    # 이미지 '가로'로 정규화한 핀홀 초점거리. 즉 거리 d에 있는, 광축에 수직으로
-    # o만큼 떨어진 점은 화면 중심에서 o / (d / FOCAL_NORM) 만큼 떨어져 보인다.
-    # 1.0은 대략 수평 화각 53도로, 일반적인 휴대폰 카메라의 어림값이다.
-    # 실제 캘리브레이션을 한 값이 아니므로 아래 거리 추정은 측정이 아니라 추정치다.
-    FOCAL_NORM = 1.0
-
-    # 손목(랜드마크 0) ~ 엄지 CMC(랜드마크 1) 실제 길이. 거리 역산의 기준자.
-    WRIST_TO_THUMB_CMC_M = 0.035
-
-    # 손바닥 사각형을 그릴 때 잇는 랜드마크 (손목 - 엄지CMC - 검지MCP - 새끼MCP)
-    PALM_QUAD = [0, 1, 5, 17]
+    # 상수 설명은 fundamental.const.HandTrackerConst 참고.
+    FOCAL_NORM = HandTrackerConst.FOCAL_NORM
+    WRIST_TO_THUMB_CMC_M = HandTrackerConst.WRIST_TO_THUMB_CMC_M
+    PALM_QUAD = HandTrackerConst.PALM_QUAD
 
     def __init__(self, max_num_hands=2, min_detection_confidence=0.8,
                  min_tracking_confidence=0.8):
@@ -272,13 +266,10 @@ class HandFollower:
     않는다는 프로젝트 관례를 따름).
     """
 
-    FOLLOW_DISTANCE_M = 0.45
-    # 정규화 이미지 좌표 기준 데드존 반경 — 손 중심이 화면 정중앙에서 이보다
-    # 덜 벗어나 있으면 그대로 둔다(0.5는 화면 절반 폭/높이).
-    CENTER_OFFSET_THRESHOLD = 0.15
-    # 깊이(앞뒤) 오차를 한 번에 보정하는 비율. 1.0이면 즉시 FOLLOW_DISTANCE_M로
-    # 스냅(과거 동작), 0에 가까울수록 거의 따라가지 않는다.
-    DEPTH_FOLLOW_GAIN = 0.3
+    # 상수 설명은 fundamental.const.HandFollowerConst 참고.
+    FOLLOW_DISTANCE_M = HandFollowerConst.FOLLOW_DISTANCE_M
+    CENTER_OFFSET_THRESHOLD = HandFollowerConst.CENTER_OFFSET_THRESHOLD
+    DEPTH_FOLLOW_GAIN = HandFollowerConst.DEPTH_FOLLOW_GAIN
 
     def __init__(self, follow_distance=FOLLOW_DISTANCE_M,
                  center_offset_threshold=CENTER_OFFSET_THRESHOLD,

@@ -60,17 +60,18 @@ GEMINI_API_KEY=
 ## 파일 구조
 
 하드웨어 제어(`hardware/`), 기구학+3D 프리뷰(`kinematics/`), AI 인지 기능(`perception/`),
-웹 제어 대시보드(`src/`)를 별도 패키지로 분리했다. 서로 독립적이며, `logger.py`만 전체가
-공통으로 참조하는 루트 모듈이다.
+웹 제어 대시보드(`src/`)를 별도 패키지로 분리했다. 서로 독립적이며, `fundamental/`(로거 +
+상수)만 전체가 공통으로 참조하는 루트 패키지다.
 
 ```text
 desky/
 ├── main.py             # 진입점 — src.app.run() 실행. 하드웨어 유무 무관
-├── logger.py           # 공통 [TAG] message 콘솔 로거
+├── fundamental/         # 전체 공통 루트 패키지
+│   ├── logger.py           # 공통 [TAG] message 콘솔 로거
+│   └── const.py            # 프로젝트 전역 상수
 ├── requirements.txt    # 전체 의존성
 ├── hardware/           # 시리얼/서보 제어 (실제 하드웨어 필요)
 │   ├── controller.py
-│   ├── control_table.py
 │   └── actuator.py
 ├── kinematics/         # FK/IK + 3D 프리뷰 (하드웨어 불필요)
 │   ├── kinematics.py
@@ -100,9 +101,9 @@ desky/
 | 파일 | 역할 |
 |------|------|
 | [main.py](main.py) | 진입점 — `src.app.run()` 호출(`python main.py` → `https://localhost:8000`). 하드웨어 없어도 실행됨 |
-| [logger.py](logger.py) | `Logger` — 모든 모듈이 공유하는 `[TAG] message` 콘솔 로거 |
+| [fundamental/logger.py](fundamental/logger.py) | `Logger` — 모든 모듈이 공유하는 `[TAG] message` 콘솔 로거 |
+| [fundamental/const.py](fundamental/const.py) | 프로젝트 전역 상수(AX-18A 컨트롤 테이블 포함) — 각 모듈이 여기서 import해서 씀 |
 | [hardware/controller.py](hardware/controller.py) | 시리얼 포트/보드레이트 초기화, 저수준 read/write (`set_speed`, `set_goal_position`, `get_present_position`) |
-| [hardware/control_table.py](hardware/control_table.py) | AX-18A 컨트롤 테이블(레지스터 주소·바이트 크기)을 클래스로 정의 |
 | [hardware/actuator.py](hardware/actuator.py) | `Actuator`(모터 1개 추상화) + `ArmController`(FK/IK ↔ Actuator 연동) |
 | [kinematics/kinematics.py](kinematics/kinematics.py) | FK/IK. `Arm`/`Joint` + 순수 파이썬 선형대수. 하드웨어 불필요 |
 | [kinematics/urdf_loader.py](kinematics/urdf_loader.py) | `configure/desky.urdf`를 파싱해 `Arm` 생성 (`xml.etree`) |
@@ -119,14 +120,14 @@ desky/
 
 > **항상 저장소 루트에서 실행할 것** (`python main.py`, `python -m kinematics.kinematics`,
 > `python -m kinematics.simulate`, `python -m src.app` 등). 하위 폴더의 파일을 직접
-> 실행하면(`python kinematics/kinematics.py`) 루트가 `sys.path`에 없어 `logger` 임포트가
+> 실행하면(`python kinematics/kinematics.py`) 루트가 `sys.path`에 없어 `fundamental` 임포트가
 > 깨진다.
 
 ### 계층 구조
 
 ```text
 main.py
-  └─ src.app (Flask) ── hardware.actuator.ArmController ── hardware.actuator.Actuator ×5 ── hardware.controller.Controller ── hardware.control_table.AX_18A + dynamixel_sdk
+  └─ src.app (Flask) ── hardware.actuator.ArmController ── hardware.actuator.Actuator ×5 ── hardware.controller.Controller ── fundamental.const.AX_18A + dynamixel_sdk
        │                                       └─ kinematics.kinematics.Arm ◄── kinematics.urdf_loader.load_arm()
        ├─ src.api.gemini.Gemini
        ├─ src.api.camera.Camera ── src.api.gemini.Gemini (음성 클립 STT)

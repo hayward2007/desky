@@ -9,45 +9,21 @@ import os
 
 from flask import jsonify, request
 
-from logger import Logger
+from fundamental.const import GeminiConst
+from fundamental.logger import Logger
 
 
 class Gemini:
     """google-genai 클라이언트 한 개를 감싸고, Gemini를 쓰는 모든 기능을 모아 둔 객체."""
 
-    MODEL = "gemini-flash-latest"  # 빠르고 무료 한도가 넉넉함
-
-    # 답이 TTS로 그대로 읽히므로 짧고 말하듯이. 목록/기호/마크다운은 소리로 읽으면
-    # 이상하니 금지한다.
-    CHAT_INSTRUCTION = (
-        "너는 음성으로 대답하는 한국어 AI 비서야. 대답은 그대로 소리 내어 읽히니까, "
-        "최대한 짧게, 100자 이내로 꼭 필요한 핵심만 자연스러운 구어체로 말해. 덧붙이는 설명은 생략해. "
-        "목록·번호·기호·마크다운·이모지는 쓰지 말고 말하듯이 이어서 답해."
-    )
-    SUMMARY_INSTRUCTION = (
-        "너는 문서를 음성으로 요약해주는 한국어 비서야. 핵심만 3문장 이내로, "
-        "목록·기호 없이 말하듯 간결하게 정리해."
-    )
-    STT_INSTRUCTION = "이 오디오를 한국어 텍스트로 정확히 받아써줘. 설명 없이 텍스트만 출력해."
-
-    # 문서 전체 텍스트를 그대로 뽑을 때 (화면에 표시용)
-    DOC_PARSE_INSTRUCTION = (
-        "이 이미지는 종이 문서를 촬영한 것이다. 문서에 적힌 모든 텍스트를 정확히 "
-        "읽어서 그대로 출력해라. 원본의 줄바꿈을 최대한 유지하고, 설명이나 요약 없이 "
-        "텍스트만 출력해라. 손글씨도 최대한 읽어라. 문서에 글자가 없으면 '(텍스트 없음)'"
-        "이라고만 답해라."
-    )
-    # 문서를 음성으로 읽어줄 때 (짧은 요약, TTS 친화적)
-    DOC_READ_INSTRUCTION = (
-        "이 이미지는 사용자가 가리킨 종이 문서다. 내용을 읽고 핵심만 한국어로 "
-        "간결하게 3문장 이내로, 목록·기호·마크다운 없이 말하듯이 설명해라. "
-        "글자가 없으면 '문서에서 글자를 못 찾았어요'라고만 답해라."
-    )
-
-    # 사고를 억지로 누르면 이 모델은 사고 과정을 답변 본문에 적어버린다(페르소나·
-    # 포맷 체크리스트가 새어 나옴). 그래서 사고 수준은 기본값에 맡기고 천장만
-    # 넉넉히 줘서 '사고 + 답'이 잘리지 않게 한다. 천장을 올려도 답이 길어지진 않는다.
-    MAX_OUTPUT_TOKENS = 8192
+    # 모델명 + 시스템 프롬프트 + 토큰 한도 설명은 fundamental.const.GeminiConst 참고.
+    MODEL = GeminiConst.MODEL
+    CHAT_INSTRUCTION = GeminiConst.CHAT_INSTRUCTION
+    SUMMARY_INSTRUCTION = GeminiConst.SUMMARY_INSTRUCTION
+    STT_INSTRUCTION = GeminiConst.STT_INSTRUCTION
+    DOC_PARSE_INSTRUCTION = GeminiConst.DOC_PARSE_INSTRUCTION
+    DOC_READ_INSTRUCTION = GeminiConst.DOC_READ_INSTRUCTION
+    MAX_OUTPUT_TOKENS = GeminiConst.MAX_OUTPUT_TOKENS
 
     def __init__(self):
         self.client = None

@@ -4,9 +4,10 @@ import time
 
 from flask import Response, jsonify
 
-from logger import Logger
+from fundamental.const import CameraConst
+from fundamental.logger import Logger
 
-WEBM_EBML_HEADER = b"\x1a\x45\xdf\xa3"
+WEBM_EBML_HEADER = CameraConst.WEBM_EBML_HEADER
 
 
 class Camera:

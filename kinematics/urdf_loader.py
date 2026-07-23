@@ -13,7 +13,7 @@ import os
 import xml.etree.ElementTree as ET
 
 from .kinematics import Arm, Joint, _matmul, _translate, _rpy
-from logger import Logger
+from fundamental.logger import Logger
 
 _DEFAULT_URDF_PATH = os.path.join(os.path.dirname(__file__), "configure", "desky.urdf")
 

@@ -1,14 +1,14 @@
-from .control_table import *
 from .controller import *
-from logger import Logger
+from fundamental.const import AX_18A, HardwareActuatorConst
+from fundamental.logger import Logger
 from kinematics.urdf_loader import load_arm
 
 import time
 
 class Actuator:
-    __TIME_INTERVAL = 0.025
+    __TIME_INTERVAL = HardwareActuatorConst.TIME_INTERVAL_S
 
-    __MIN_SPEED = 1
+    __MIN_SPEED = HardwareActuatorConst.MIN_SPEED_PERCENT
 
     def __init__(self, id: int, model: str, controller: Controller):
         self.id = id
@@ -21,7 +21,7 @@ class Actuator:
         self.controller.set_speed(self.id, self.__MIN_SPEED, self.control_table)
         self._last_speed = self.__MIN_SPEED
 
-    def goto(self, degree: float, speed: float = 5):
+    def goto(self, degree: float, speed: float = HardwareActuatorConst.DEFAULT_SPEED_PERCENT):
         Logger.log("ACTUATOR", f"ID {self.id} goto degree={degree} speed={speed}")
         # Moving_Speed is only re-written when it actually changes. Every
         # caller in this codebase drives with the same default speed, so
@@ -62,7 +62,8 @@ class ArmController:
             raise ValueError(f"Missing actuators for joint id(s): {missing}")
         self.actuators = [by_id[joint.id] for joint in self.arm.joints]
 
-    def goto_position(self, target_pos, target_rot=None, speed: float = 5, seed=None):
+    def goto_position(self, target_pos, target_rot=None,
+                       speed: float = HardwareActuatorConst.DEFAULT_SPEED_PERCENT, seed=None):
         """Solve IK for `target_pos` and drive every actuator to the result.
 
         Returns (q, converged) from kinematics.Arm.ik. Leaves the actuators
@@ -80,7 +81,7 @@ class ArmController:
             actuator.goto(deg, speed=speed)
         return q, converged
 
-    def goto_joints(self, servo_degs, speed: float = 5):
+    def goto_joints(self, servo_degs, speed: float = HardwareActuatorConst.DEFAULT_SPEED_PERCENT):
         """FK-style control: command EVERY actuator to a given servo angle and
         return the resulting end-effector position via forward kinematics.
 

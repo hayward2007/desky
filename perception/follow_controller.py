@@ -21,18 +21,17 @@ import time
 
 from .face_tracker import FaceFollower
 from .hand_tracker import HandFollower
+from fundamental.const import FollowControllerConst
 
 
 class FollowController:
     """얼굴/손/idle 사이를 오가며 다음 명령을 결정하는 상태 객체."""
 
-    IDLE_POSITION = (0.0, 0.0, 0.34)
-    # IDLE_POSITION 도달 판정 허용 오차(m) — 이 안에 들어오면 복귀 완료로 본다.
-    RETURN_TOLERANCE_M = 0.02
-    # 룩어라운드에서 1번 관절(yaw)이 idle 자세 기준으로 왕복하는 최대 각도(rad).
-    LOOKAROUND_AMPLITUDE = math.radians(40)
-    # 왕복 한 사이클(가운데->오른쪽->가운데->왼쪽->가운데) 걸리는 시간(초).
-    LOOKAROUND_PERIOD_S = 6.0
+    # 상수 설명은 fundamental.const.FollowControllerConst 참고.
+    IDLE_POSITION = FollowControllerConst.IDLE_POSITION
+    RETURN_TOLERANCE_M = FollowControllerConst.RETURN_TOLERANCE_M
+    LOOKAROUND_AMPLITUDE = FollowControllerConst.LOOKAROUND_AMPLITUDE
+    LOOKAROUND_PERIOD_S = FollowControllerConst.LOOKAROUND_PERIOD_S
 
     def __init__(self, arm, face_follower=None, hand_follower=None):
         self.arm = arm

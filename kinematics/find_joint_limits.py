@@ -56,18 +56,19 @@ import mujoco
 
 from .mujoco_sim import _qpos_addrs
 from .urdf_loader import _DEFAULT_URDF_PATH, load_arm
-from logger import Logger
+from fundamental.const import FindJointLimitsConst
+from fundamental.logger import Logger
 
-STEP_DEG = 0.5           # sweep granularity
-SAFETY_MARGIN_DEG = 2.0  # back off the found collision boundary by this much
-COUPLE_SAMPLES = 9       # joint3 sample points for joint2's coupled_limit table
+STEP_DEG = FindJointLimitsConst.STEP_DEG                      # sweep granularity
+SAFETY_MARGIN_DEG = FindJointLimitsConst.SAFETY_MARGIN_DEG    # back off the found collision boundary by this much
+COUPLE_SAMPLES = FindJointLimitsConst.COUPLE_SAMPLES          # joint3 sample points for joint2's coupled_limit table
 
 # joint5 carries the phone/camera mount. MuJoCo only knows about mesh
 # self-collision, not the camera or its cable, so it can't discover on its
 # own that an extreme wrist rotation would wind up the cable or leave the
 # camera pointed somewhere useless — this is a hard, independent cap,
 # intersected with whatever the self-collision sweep finds for joint5.
-JOINT5_CAMERA_SAFE_SERVO_DEG = (90.0, 270.0)
+JOINT5_CAMERA_SAFE_SERVO_DEG = FindJointLimitsConst.JOINT5_CAMERA_SAFE_SERVO_DEG
 
 
 def _physical_bounds(joint):

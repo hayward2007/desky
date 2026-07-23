@@ -42,22 +42,17 @@ import mujoco.viewer
 import numpy as np
 
 from .urdf_loader import load_arm, _DEFAULT_URDF_PATH
-from logger import Logger
+from fundamental.const import MujocoSimConst
+from fundamental.logger import Logger
 
 # Joint-axis overlay: one colored arrow per revolute joint, drawn from its
 # world-space anchor (data.xanchor) along its world-space rotation axis
 # (data.xaxis) — MuJoCo computes both every mj_forward, so no extra FK math
 # is needed here. Colors just cycle per joint id so the 5 arrows are visually
 # distinguishable; they don't encode yaw/roll/pitch.
-_AXIS_LEN = 0.08
-_AXIS_WIDTH = 0.003
-_AXIS_COLORS = [
-    (0.90, 0.10, 0.10, 1.0),
-    (0.10, 0.80, 0.20, 1.0),
-    (0.15, 0.45, 0.95, 1.0),
-    (0.95, 0.80, 0.10, 1.0),
-    (0.85, 0.15, 0.85, 1.0),
-]
+_AXIS_LEN = MujocoSimConst.AXIS_LEN
+_AXIS_WIDTH = MujocoSimConst.AXIS_WIDTH
+_AXIS_COLORS = MujocoSimConst.AXIS_COLORS
 
 
 def _reclamp_all(arm, q):

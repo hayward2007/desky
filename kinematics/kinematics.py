@@ -24,20 +24,21 @@ you have the real numbers. FK/IK adapt automatically to whatever you set.
 
 import math
 
-from logger import Logger
+from fundamental.const import KinematicsConst, ArmConst
+from fundamental.logger import Logger
 
 # ---------------------------------------------------------------------------
 # Link geometry — PLACEHOLDERS. Replace with measured values (any consistent
 # length unit; mm assumed). Each offset is the translation from the previous
 # joint's frame to this joint's origin, expressed in the previous frame BEFORE
-# this joint rotates.
+# this joint rotates. Actual values live in fundamental.const.KinematicsConst.
 # ---------------------------------------------------------------------------
-BASE_HEIGHT_MM = 50.0   # base bottom -> yaw joint (along Z)
-RISER_MM       = 30.0   # yaw joint  -> roll joint (along Z)
-SHOULDER_MM    = 40.0   # roll joint -> first pitch joint (id3), along Z
-UPPER_ARM_MM   = 120.0  # id3 -> id4, along local X
-FOREARM_MM     = 100.0  # id4 -> id5, along local X
-TOOL_MM        = 80.0   # id5 -> phone mount (end-effector), along local X
+BASE_HEIGHT_MM = KinematicsConst.BASE_HEIGHT_MM   # base bottom -> yaw joint (along Z)
+RISER_MM       = KinematicsConst.RISER_MM         # yaw joint  -> roll joint (along Z)
+SHOULDER_MM    = KinematicsConst.SHOULDER_MM      # roll joint -> first pitch joint (id3), along Z
+UPPER_ARM_MM   = KinematicsConst.UPPER_ARM_MM     # id3 -> id4, along local X
+FOREARM_MM     = KinematicsConst.FOREARM_MM       # id4 -> id5, along local X
+TOOL_MM        = KinematicsConst.TOOL_MM          # id5 -> phone mount (end-effector), along local X
 
 
 # ---------------------------------------------------------------------------
@@ -124,9 +125,9 @@ def _inverse(M):
 # Joint model
 # ---------------------------------------------------------------------------
 # Axis unit vectors for the three joint roles (URDF <axis xyz="..."/> convention).
-YAW = (0.0, 0.0, 1.0)    # about Z
-ROLL = (1.0, 0.0, 0.0)   # about X
-PITCH = (0.0, 1.0, 0.0)  # about Y
+YAW = KinematicsConst.YAW      # about Z
+ROLL = KinematicsConst.ROLL    # about X
+PITCH = KinematicsConst.PITCH  # about Y
 
 
 class Joint:
@@ -220,7 +221,7 @@ class Arm:
     # because its self-collision-free range is narrow and depends on joint3's
     # angle (see Joint.coupled_table) — preferring joint1 (yaw) to cover the
     # same reach keeps joint2 away from its coupled limits more often.
-    DEFAULT_JOINT_WEIGHTS = {2: 4.0}
+    DEFAULT_JOINT_WEIGHTS = ArmConst.DEFAULT_JOINT_WEIGHTS
 
     def __init__(self, joints=None, tool_offset=TOOL_OFFSET, joint_weights=None):
         self.joints = joints if joints is not None else DEFAULT_JOINTS

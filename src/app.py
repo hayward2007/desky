@@ -61,7 +61,8 @@ from flask_sock import Sock
 
 from kinematics.urdf_loader import load_arm, _DEFAULT_URDF_PATH
 from kinematics.simulate import parse_urdf, draw_pose, workspace_bounds
-from logger import Logger
+from fundamental.const import AppConst
+from fundamental.logger import Logger
 from perception.document_scanner import DocumentScanner
 from perception.face_tracker import FaceTracker
 from perception.follow_controller import FollowController
@@ -111,12 +112,12 @@ _root_link, _chain, _visuals = parse_urdf(_DEFAULT_URDF_PATH)
 _render_bounds = workspace_bounds(arm, _root_link, _chain, _visuals)
 
 
-_Q_CACHE_TTL = 3.0  # seconds
+_Q_CACHE_TTL = AppConst.Q_CACHE_TTL_S  # seconds
 _q_cache = {"q": None, "t": 0.0}
 
 # Max width (px) of the copy of each camera frame fed to mediapipe in run()'s
 # preview loop — see the comment at its one call site for why.
-_MEDIAPIPE_MAX_WIDTH = 480
+_MEDIAPIPE_MAX_WIDTH = AppConst.MEDIAPIPE_MAX_WIDTH
 
 
 def _current_q():

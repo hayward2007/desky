@@ -13,7 +13,8 @@
 import cv2
 import numpy as np
 
-from logger import Logger
+from fundamental.const import DocumentScannerConst
+from fundamental.logger import Logger
 
 
 class Document:
@@ -43,12 +44,13 @@ class Document:
 class DocumentScanner:
     """프레임에서 문서를 찾고, 미리보기를 그리고, 선택한 문서를 반듯하게 펴는 객체."""
 
-    PROC_HEIGHT = 500.0      # 검출용으로 축소할 높이. 결과 좌표는 원본 크기로 되돌린다
-    CANNY_LO = 75            # Canny 하한 임계값 (사진이 흐릿하면 낮춘다)
-    CANNY_HI = 200           # Canny 상한 임계값
-    MIN_AREA_RATIO = 0.04    # 문서로 인정할 최소 면적(화면의 4%). 작은 문서를 잡으려면 낮춘다
-    RECT_MIN = 0.60          # 사각형성(윤곽 면적 / 최소회전사각형 면적) 하한. 손·불규칙 형태 제거용
-    DEDUP_DIST_RATIO = 0.05  # 두 사각형 중심이 화면 대각선의 이 비율보다 가까우면 같은 문서로 본다
+    # 상수 설명은 fundamental.const.DocumentScannerConst 참고.
+    PROC_HEIGHT = DocumentScannerConst.PROC_HEIGHT
+    CANNY_LO = DocumentScannerConst.CANNY_LO
+    CANNY_HI = DocumentScannerConst.CANNY_HI
+    MIN_AREA_RATIO = DocumentScannerConst.MIN_AREA_RATIO
+    RECT_MIN = DocumentScannerConst.RECT_MIN
+    DEDUP_DIST_RATIO = DocumentScannerConst.DEDUP_DIST_RATIO
 
     def __init__(self, **overrides):
         """튜닝 파라미터를 키워드 인자로 덮어쓸 수 있다.

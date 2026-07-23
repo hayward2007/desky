@@ -13,7 +13,7 @@ import cv2
 import numpy as np
 from flask import Response, jsonify, request
 
-from logger import Logger
+from fundamental.logger import Logger
 
 
 class ScanAPI:
