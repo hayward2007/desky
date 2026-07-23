@@ -1,0 +1,328 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>desky arm control</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='theme.css') }}">
+  <style>
+    /* PC 대시보드 — 폰 화면(/mobile)과 같은 팔레트를 쓰되, 이쪽은 값을 읽고
+       숫자를 넣는 정비용 도구다. 그래서 장식을 줄이고 숫자는 전부 고정폭으로.
+       색·버튼 등 공통 요소는 static/theme.css. */
+    body {
+      max-width: 760px;
+      margin: 0 auto;
+      padding: 32px 20px 56px;
+      height: auto;
+    }
+    h1 {
+      font-size: 20px; font-weight: 700; letter-spacing: -.02em;
+      margin: 0 0 20px;
+    }
+    h1 span { color: var(--signal); }
+
+    section {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: var(--r-panel);
+      padding: 18px 20px;
+      margin-bottom: 16px;
+    }
+    section h2 {
+      font-family: var(--mono);
+      font-size: 10px; font-weight: 600;
+      letter-spacing: .14em; text-transform: uppercase;
+      color: var(--dim);
+      margin: 0 0 14px;
+    }
+
+    button {
+      appearance: none;
+      border: 0; border-radius: 10px;
+      background: var(--graphite); color: #fff;
+      font-family: var(--sans); font-size: 13px; font-weight: 600;
+      padding: 9px 16px; cursor: pointer;
+      transition: filter .12s ease;
+    }
+    button:hover { filter: brightness(1.18); }
+    button:disabled { background: #C3C6CC; cursor: not-allowed; filter: none; }
+    button.go { background: var(--signal); }
+
+    input[type="number"] {
+      width: 6rem; padding: 6px 8px;
+      border: 1px solid var(--line); border-radius: 8px;
+      font-family: var(--mono); font-size: 13px;
+      color: var(--ink); background: var(--panel);
+    }
+    input[type="number"]:focus { border-color: var(--signal); outline: none; }
+
+    /* 관절 슬라이더 한 줄 */
+    .slider-row { display: flex; align-items: center; gap: 12px; margin-bottom: 8px; }
+    .slider-row label {
+      width: 5rem; font-family: var(--mono); font-size: 11px;
+      font-weight: 600; color: var(--dim);
+    }
+    .slider-row input[type="range"] { flex: 1; accent-color: var(--signal); }
+    .slider-row .val {
+      width: 4.5rem; text-align: right;
+      font-family: var(--mono); font-variant-numeric: tabular-nums;
+      font-size: 12px; font-weight: 600;
+    }
+
+    .ik-row { display: flex; align-items: center; gap: 10px; margin: 12px 0; flex-wrap: wrap; }
+    .ik-row label { font-family: var(--mono); font-size: 11px; color: var(--dim); }
+
+    /* 미리보기 이미지 — 영상/렌더가 오기 전 바탕은 인디고(살아 있는 면) */
+    #sim-view, #camera-feed {
+      width: 100%; display: block;
+      border-radius: var(--r-card);
+      background: var(--signal-wash);
+      margin-bottom: 10px;
+    }
+    #camera-feed { background: var(--signal); }
+
+    #status, #fk-result, #ik-result, #move-result, #camera-status {
+      font-family: var(--mono); font-variant-numeric: tabular-nums;
+      font-size: 12px; line-height: 1.6;
+      white-space: pre-wrap; margin-top: 8px; color: var(--graphite-dp);
+    }
+    .error { color: var(--alert); }
+
+    .banner {
+      background: var(--alert-wash); color: var(--alert);
+      border: 1px solid rgba(192, 80, 63, .25);
+      border-radius: var(--r-card);
+      padding: 10px 14px; margin-bottom: 16px;
+      font-size: 13px; line-height: 1.55;
+    }
+    .muted { color: var(--dim); margin-top: 0; font-size: 13px; line-height: 1.6; }
+    code {
+      font-family: var(--mono); font-size: .92em;
+      background: var(--paper); border-radius: 4px; padding: 1px 5px;
+    }
+  </style>
+</head>
+<body>
+  <h1>desky<span>.</span> arm control</h1>
+
+  {% if not hardware_connected %}
+  <div class="banner">
+    ⚠ No hardware connected{% if hardware_error %} — {{ hardware_error }}{% endif %}.
+    The 3D simulation, FK and IK below still work; only "Move actuators" is disabled.
+  </div>
+  {% endif %}
+
+  <section>
+    <h2>Current position (FK read-back)</h2>
+    <div id="status">loading...</div>
+  </section>
+
+  <section>
+    <h2>Simulation &amp; control</h2>
+    <img id="sim-view" alt="3D preview">
+
+    <p class="muted">FK — drag a joint slider (servo degrees). Range shown is each joint's
+      self-collision-safe limit (from the URDF), not just the servo's 0–300° physical travel.
+      The preview and end-effector position update live.</p>
+    {% for joint_id in joint_ids %}
+    {% set lo = joint_ranges[joint_id][0] %}
+    {% set hi = joint_ranges[joint_id][1] %}
+    {% set home = joint_ranges[joint_id][2] %}
+    <div class="slider-row">
+      <label for="joint-{{ joint_id }}"
+             {% if joint_id in coupled_joints %}
+             title="joint{{ joint_id }}'s safe range narrows/widens depending on joint{{ coupled_joints[joint_id] }}'s current angle — this slider's [{{ '%.0f'|format(lo) }}, {{ '%.0f'|format(hi) }}] is the conservative bound that's always safe."
+             {% endif %}>id {{ joint_id }}{{ "*" if joint_id in coupled_joints }}</label>
+      <input type="range" id="joint-{{ joint_id }}" min="{{ '%.1f'|format(lo) }}" max="{{ '%.1f'|format(hi) }}"
+             step="0.5" value="{{ '%.1f'|format(home) }}" oninput="onSlider({{ joint_id }})">
+      <span class="val" id="joint-val-{{ joint_id }}">{{ '%.0f'|format(home) }}°</span>
+    </div>
+    {% endfor %}
+    {% if coupled_joints %}
+    <p class="muted" style="font-size: 12px;">* joint{{ coupled_joints.keys() | list | join(", joint") }}'s
+      slider range is the conservative bound valid no matter what its coupled joint is doing;
+      the server re-checks the live, coupling-aware range on every move and may reject a value
+      inside this slider's range if the other joint has since moved.</p>
+    {% endif %}
+    <div id="fk-result"></div>
+
+    <p class="muted" style="margin-top:1rem;">IK — enter a target position; the sliders snap to the solution (nothing moves yet).</p>
+    <div class="ik-row">
+      <label>x <input type="number" id="x" step="0.001" value="0.0"></label>
+      <label>y <input type="number" id="y" step="0.001" value="0.0"></label>
+      <label>z <input type="number" id="z" step="0.001" value="0.3"></label>
+      <button class="go" onclick="solveIk()">Solve IK</button>
+    </div>
+    <div id="ik-result"></div>
+
+    <div style="margin-top:1rem;">
+      <button onclick="moveAll()" {{ "disabled" if not hardware_connected }}>Move actuators to sliders</button>
+      <div id="move-result"></div>
+    </div>
+  </section>
+
+  <section>
+    <h2>Mobile camera feed</h2>
+    <p>Open <code>/mobile</code> on the phone mounted on the arm to start streaming.</p>
+    <img id="camera-feed" alt="waiting for camera frames...">
+    <div id="camera-status">no frames received yet</div>
+  </section>
+
+  <script>
+    const JOINT_IDS = {{ joint_ids | tojson }};
+
+    function degrees() {
+      return JOINT_IDS.map((id) => parseFloat(document.getElementById("joint-" + id).value));
+    }
+    function setSliders(degs) {
+      JOINT_IDS.forEach((id, i) => {
+        const s = document.getElementById("joint-" + id);
+        s.value = Math.round(degs[i]);
+        document.getElementById("joint-val-" + id).textContent = s.value + "°";
+      });
+    }
+
+    // ---- server-side 3D render (debounced) + FK read-out ----
+    let renderTimer = null;
+    let lastObjectUrl = null;
+
+    async function renderView() {
+      const res = await fetch("/api/render", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ degrees: degrees() }),
+      });
+      if (!res.ok) return;
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      document.getElementById("sim-view").src = url;
+      if (lastObjectUrl) URL.revokeObjectURL(lastObjectUrl);
+      lastObjectUrl = url;
+    }
+
+    async function updateFk() {
+      const el = document.getElementById("fk-result");
+      const res = await fetch("/api/fk", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ degrees: degrees() }),
+      });
+      const data = await res.json();
+      if (!res.ok || data.error) { el.textContent = "error: " + (data.error || res.status); el.className = "error"; return; }
+      const p = data.position;
+      if (data.within_limits) {
+        el.className = "";
+        el.textContent = `end-effector: x=${p[0].toFixed(4)} y=${p[1].toFixed(4)} z=${p[2].toFixed(4)} m`;
+      } else {
+        el.className = "error";
+        el.textContent = `end-effector: x=${p[0].toFixed(4)} y=${p[1].toFixed(4)} z=${p[2].toFixed(4)} m ` +
+          `— ⚠ outside self-collision-safe range, "Move actuators" will reject this pose`;
+      }
+    }
+
+    function refreshPose() {
+      updateFk();
+      clearTimeout(renderTimer);
+      renderTimer = setTimeout(renderView, 120);  // debounce heavy PNG render
+    }
+
+    function onSlider(id) {
+      document.getElementById("joint-val-" + id).textContent =
+        document.getElementById("joint-" + id).value + "°";
+      refreshPose();
+    }
+
+    async function solveIk() {
+      const el = document.getElementById("ik-result");
+      el.className = "";
+      el.textContent = "solving IK...";
+      const body = {
+        x: parseFloat(document.getElementById("x").value),
+        y: parseFloat(document.getElementById("y").value),
+        z: parseFloat(document.getElementById("z").value),
+        seed: degrees(),
+      };
+      const res = await fetch("/api/ik", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      const data = await res.json();
+      if (!res.ok || data.error) {
+        el.textContent = "error: " + (data.error || res.status);
+        el.className = "error";
+        return;
+      }
+      setSliders(data.servo_deg);
+      refreshPose();
+      el.textContent = data.converged
+        ? "IK converged — sliders updated. Press \"Move actuators\" to command the arm."
+        : "IK did NOT converge (target out of reach) — showing closest solution.";
+      if (!data.converged) el.className = "error";
+    }
+
+    async function moveAll() {
+      const el = document.getElementById("move-result");
+      el.className = "";
+      el.textContent = "moving all actuators...";
+      const res = await fetch("/api/goto_joints", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ degrees: degrees() }),
+      });
+      const data = await res.json();
+      if (!res.ok || data.error) { el.textContent = "error: " + (data.error || res.status); el.className = "error"; return; }
+      const p = data.position;
+      el.textContent = `moved. FK position: x=${p[0].toFixed(4)} y=${p[1].toFixed(4)} z=${p[2].toFixed(4)}`;
+    }
+
+    async function refreshStatus() {
+      const el = document.getElementById("status");
+      try {
+        const res = await fetch("/api/status");
+        const data = await res.json();
+        if (!data.connected) {
+          el.textContent = "no hardware connected" + (data.error ? " — " + data.error : "");
+          el.className = "error";
+        } else if (data.position) {
+          el.textContent = `x=${data.position[0].toFixed(4)} y=${data.position[1].toFixed(4)} z=${data.position[2].toFixed(4)}`;
+          el.className = "";
+        } else {
+          el.textContent = "unavailable (an actuator failed to report its position)";
+          el.className = "error";
+        }
+      } catch (e) {
+        el.textContent = "status request failed: " + e;
+        el.className = "error";
+      }
+    }
+
+    async function refreshCamera() {
+      const img = document.getElementById("camera-feed");
+      const el = document.getElementById("camera-status");
+      try {
+        const res = await fetch("/api/camera/status");
+        const data = await res.json();
+        if (!data.streaming) {
+          el.textContent = "no frames received yet — open /mobile on the phone";
+          el.className = "error";
+          return;
+        }
+        el.textContent = `receiving — ${data.frame_count} frames, ${data.clients} client(s), last frame ${data.age_seconds.toFixed(1)}s ago`;
+        el.className = "";
+        img.src = "/api/camera/latest.jpg?t=" + Date.now();
+      } catch (e) {
+        el.textContent = "camera status request failed: " + e;
+        el.className = "error";
+      }
+    }
+
+    // Initial paint.
+    refreshPose();
+    renderView();
+    refreshStatus();
+    setInterval(refreshStatus, 1500);
+    refreshCamera();
+    setInterval(refreshCamera, 500);
+  </script>
+</body>
+</html>

@@ -1,0 +1,380 @@
+[
+  {
+    "name": "회전 4",
+    "type": 1,
+    "type_str": "revolute",
+    "occ_one": "PRT0006:1",
+    "occ_two": "FP04-F5 v1:1",
+    "axis": [
+      -0.0,
+      1.0,
+      -0.0
+    ],
+    "limit": {
+      "min_en": false,
+      "min_rad": 0.0,
+      "max_en": false,
+      "max_rad": 0.0
+    },
+    "origin_one_mm": [
+      0.0,
+      20.25,
+      120.0
+    ],
+    "origin_two_mm": [
+      0.0,
+      20.25,
+      120.0
+    ]
+  },
+  {
+    "name": "강체 5",
+    "type": 0,
+    "type_str": "rigid",
+    "occ_one": "FP04-F6 v1:1",
+    "occ_two": "PRT0001:1",
+    "origin_one_mm": [
+      13.5,
+      15.25,
+      134.5
+    ],
+    "origin_two_mm": [
+      13.5,
+      15.25,
+      134.5
+    ]
+  },
+  {
+    "name": "강체 7",
+    "type": 0,
+    "type_str": "rigid",
+    "occ_one": "PRT0001:1",
+    "occ_two": "FP04-F6 v1:1",
+    "origin_one_mm": [
+      16.0,
+      -19.25,
+      134.5
+    ],
+    "origin_two_mm": [
+      16.0,
+      -19.25,
+      134.5
+    ]
+  },
+  {
+    "name": "강체 8",
+    "type": 0,
+    "type_str": "rigid",
+    "occ_one": "FP04-F10 v1:1",
+    "occ_two": "FP04-F4 v1:1",
+    "origin_one_mm": [
+      0.0,
+      -32.75,
+      201.0
+    ],
+    "origin_two_mm": [
+      0.0,
+      -32.75,
+      201.0
+    ]
+  },
+  {
+    "name": "강체 9",
+    "type": 0,
+    "type_str": "rigid",
+    "occ_one": "FP04-F10 v1:4",
+    "occ_two": "FP04-F10 v1:1",
+    "origin_one_mm": [
+      0.0,
+      -32.75,
+      205.0
+    ],
+    "origin_two_mm": [
+      0.0,
+      -32.75,
+      205.0
+    ]
+  },
+  {
+    "name": "강체 10",
+    "type": 0,
+    "type_str": "rigid",
+    "occ_one": "FP04-F10 v1:2",
+    "occ_two": "FP04-F10 v1:4",
+    "origin_one_mm": [
+      0.0,
+      -32.75,
+      209.0
+    ],
+    "origin_two_mm": [
+      0.0,
+      -32.75,
+      209.0
+    ]
+  },
+  {
+    "name": "강체 11",
+    "type": 0,
+    "type_str": "rigid",
+    "occ_one": "FP04-F10 v1:3",
+    "occ_two": "FP04-F10 v1:2",
+    "origin_one_mm": [
+      0.0,
+      -32.75,
+      213.0
+    ],
+    "origin_two_mm": [
+      0.0,
+      -32.75,
+      213.0
+    ]
+  },
+  {
+    "name": "강체 12",
+    "type": 0,
+    "type_str": "rigid",
+    "occ_one": "FP04-F10 v1:6",
+    "occ_two": "FP04-F10 v1:3",
+    "origin_one_mm": [
+      0.0,
+      -32.75,
+      217.0
+    ],
+    "origin_two_mm": [
+      0.0,
+      -32.75,
+      217.0
+    ]
+  },
+  {
+    "name": "강체 13",
+    "type": 0,
+    "type_str": "rigid",
+    "occ_one": "FP04-F10 v1:5",
+    "occ_two": "FP04-F10 v1:6",
+    "origin_one_mm": [
+      0.0,
+      -32.75,
+      221.0
+    ],
+    "origin_two_mm": [
+      0.0,
+      -32.75,
+      221.0
+    ]
+  },
+  {
+    "name": "강체 14",
+    "type": 0,
+    "type_str": "rigid",
+    "occ_one": "FP04-F3 v1:1",
+    "occ_two": "FP04-F10 v1:5",
+    "origin_one_mm": [
+      0.0,
+      -32.75,
+      225.0
+    ],
+    "origin_two_mm": [
+      0.0,
+      -32.75,
+      225.0
+    ]
+  },
+  {
+    "name": "강체 19",
+    "type": 0,
+    "type_str": "rigid",
+    "occ_one": "PRT0001:1",
+    "occ_two": "FP04-F3 v1:1",
+    "origin_one_mm": [
+      16.0,
+      -40.75,
+      230.5
+    ],
+    "origin_two_mm": [
+      16.0,
+      -40.75,
+      230.5
+    ]
+  },
+  {
+    "name": "회전 24",
+    "type": 1,
+    "type_str": "revolute",
+    "occ_one": "구성요소1:1",
+    "occ_two": "PRT0006:1",
+    "axis": [
+      1.0,
+      0.0,
+      -0.0
+    ],
+    "limit": {
+      "min_en": false,
+      "min_rad": 0.0,
+      "max_en": false,
+      "max_rad": 0.0
+    },
+    "origin_one_mm": [
+      21.0,
+      -32.75,
+      149.0
+    ],
+    "origin_two_mm": [
+      21.0,
+      -32.75,
+      149.0
+    ]
+  },
+  {
+    "name": "강체 25",
+    "type": 0,
+    "type_str": "rigid",
+    "occ_one": "PRT0001:1",
+    "occ_two": "구성요소1:1",
+    "origin_one_mm": [
+      16.0,
+      -46.25,
+      244.0
+    ],
+    "origin_two_mm": [
+      16.0,
+      -46.25,
+      244.0
+    ]
+  },
+  {
+    "name": "회전 26",
+    "type": 1,
+    "type_str": "revolute",
+    "occ_one": "구성요소1:2",
+    "occ_two": "PRT0006:1",
+    "axis": [
+      1.0,
+      -0.0,
+      -0.0
+    ],
+    "limit": {
+      "min_en": false,
+      "min_rad": 0.0,
+      "max_en": false,
+      "max_rad": 0.0
+    },
+    "origin_one_mm": [
+      21.0,
+      -32.75,
+      266.5
+    ],
+    "origin_two_mm": [
+      21.0,
+      -32.75,
+      266.5
+    ]
+  },
+  {
+    "name": "강체 27",
+    "type": 0,
+    "type_str": "rigid",
+    "occ_one": "PRT0001:1",
+    "occ_two": "구성요소1:2",
+    "origin_one_mm": [
+      16.0,
+      -46.25,
+      361.5
+    ],
+    "origin_two_mm": [
+      16.0,
+      -46.25,
+      361.5
+    ]
+  },
+  {
+    "name": "강체 29",
+    "type": 0,
+    "type_str": "rigid",
+    "occ_one": "PRT0001:1",
+    "occ_two": "구성요소3:1",
+    "origin_one_mm": [
+      -13.5,
+      -6.5,
+      51.0
+    ],
+    "origin_two_mm": [
+      -13.5,
+      -6.5,
+      51.0
+    ]
+  },
+  {
+    "name": "회전 30",
+    "type": 1,
+    "type_str": "revolute",
+    "occ_one": "구성요소2:1",
+    "occ_two": "PRT0006:1",
+    "axis": [
+      0.0,
+      0.0,
+      1.0
+    ],
+    "limit": {
+      "min_en": false,
+      "min_rad": 0.0,
+      "max_en": false,
+      "max_rad": 0.0
+    },
+    "origin_one_mm": [
+      0.0,
+      0.0,
+      88.0
+    ],
+    "origin_two_mm": [
+      0.0,
+      0.0,
+      88.0
+    ]
+  },
+  {
+    "name": "강체 31",
+    "type": 0,
+    "type_str": "rigid",
+    "occ_one": "FP04-F5 v1:1",
+    "occ_two": "구성요소2:1",
+    "origin_one_mm": [
+      -5.66,
+      -27.34,
+      91.0
+    ],
+    "origin_two_mm": [
+      -5.66,
+      -27.34,
+      91.0
+    ]
+  },
+  {
+    "name": "회전 32",
+    "type": 1,
+    "type_str": "revolute",
+    "occ_one": "구성요소4:1",
+    "occ_two": "PRT0006:1",
+    "axis": [
+      1.0,
+      -0.0,
+      -0.0
+    ],
+    "limit": {
+      "min_en": false,
+      "min_rad": 0.0,
+      "max_en": false,
+      "max_rad": 0.0
+    },
+    "origin_one_mm": [
+      21.0,
+      -32.75,
+      384.0
+    ],
+    "origin_two_mm": [
+      21.0,
+      -32.75,
+      384.0
+    ]
+  }
+]

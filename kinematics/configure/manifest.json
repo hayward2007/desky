@@ -1,0 +1,590 @@
+[
+  {
+    "stl": "dynamixel1.stl",
+    "occurrence": "AX-serise v1:1",
+    "proposed_role": "dynamixel1(J1 yaw base)",
+    "world_transform_rot": [
+      [
+        1.0,
+        0.0,
+        0.0
+      ],
+      [
+        0.0,
+        1.0,
+        0.0
+      ],
+      [
+        0.0,
+        0.0,
+        1.0
+      ]
+    ],
+    "world_transform_trans_mm": [
+      0.0,
+      0.0,
+      67.0
+    ],
+    "world_bbox_min_mm": [
+      -16.01,
+      -38.51,
+      47.99
+    ],
+    "world_bbox_max_mm": [
+      16.01,
+      11.51,
+      88.07
+    ],
+    "tris": 39294,
+    "stl_local_bbox_min_mm": [
+      -16.0,
+      -38.5,
+      -19.0
+    ],
+    "stl_local_bbox_max_mm": [
+      16.0,
+      11.5,
+      21.045
+    ],
+    "bytes": 1964784
+  },
+  {
+    "stl": "bracket_f5.stl",
+    "occurrence": "FP04-F5 v1:1",
+    "proposed_role": "bracket",
+    "world_transform_rot": [
+      [
+        -1.0,
+        -0.0,
+        0.0
+      ],
+      [
+        0.0,
+        1.0,
+        0.0
+      ],
+      [
+        -0.0,
+        -0.0,
+        -1.0
+      ]
+    ],
+    "world_transform_trans_mm": [
+      0.0,
+      -16.0,
+      120.0
+    ],
+    "world_bbox_min_mm": [
+      -14.01,
+      -56.26,
+      90.99
+    ],
+    "world_bbox_max_mm": [
+      14.01,
+      24.26,
+      131.01
+    ],
+    "tris": 12860,
+    "stl_local_bbox_min_mm": [
+      -14.0,
+      -40.25,
+      -11.0
+    ],
+    "stl_local_bbox_max_mm": [
+      14.0,
+      40.25,
+      29.0
+    ],
+    "bytes": 643084
+  },
+  {
+    "stl": "dynamixel2.stl",
+    "occurrence": "AX-serise v1:2",
+    "proposed_role": "dynamixel2",
+    "world_transform_rot": [
+      [
+        1.0,
+        0.0,
+        -0.0
+      ],
+      [
+        -0.0,
+        0.0,
+        1.0
+      ],
+      [
+        -0.0,
+        -1.0,
+        -0.0
+      ]
+    ],
+    "world_transform_trans_mm": [
+      0.0,
+      -0.75,
+      120.0
+    ],
+    "world_bbox_min_mm": [
+      -16.01,
+      -19.76,
+      108.49
+    ],
+    "world_bbox_max_mm": [
+      16.01,
+      20.32,
+      158.51
+    ],
+    "tris": 39294,
+    "stl_local_bbox_min_mm": [
+      -16.0,
+      -38.5,
+      -19.0
+    ],
+    "stl_local_bbox_max_mm": [
+      16.0,
+      11.5,
+      21.045
+    ],
+    "bytes": 1964784
+  },
+  {
+    "stl": "bracket_f6.stl",
+    "occurrence": "FP04-F6 v1:1",
+    "proposed_role": "bracket",
+    "world_transform_rot": [
+      [
+        -0.0,
+        -1.0,
+        -0.0
+      ],
+      [
+        1.0,
+        -0.0,
+        -0.0
+      ],
+      [
+        -0.0,
+        0.0,
+        1.0
+      ]
+    ],
+    "world_transform_trans_mm": [
+      19.0,
+      15.25,
+      134.5
+    ],
+    "world_bbox_min_mm": [
+      9.99,
+      -22.76,
+      121.99
+    ],
+    "world_bbox_max_mm": [
+      19.01,
+      18.26,
+      147.01
+    ],
+    "tris": 3108,
+    "stl_local_bbox_min_mm": [
+      -38.0,
+      0.0,
+      -12.5
+    ],
+    "stl_local_bbox_max_mm": [
+      3.0,
+      9.0,
+      12.5
+    ],
+    "bytes": 155484
+  },
+  {
+    "stl": "dynamixel3.stl",
+    "occurrence": "AX-serise v1:3",
+    "proposed_role": "dynamixel3",
+    "world_transform_rot": [
+      [
+        -0.0,
+        -0.0,
+        1.0
+      ],
+      [
+        1.0,
+        -0.0,
+        0.0
+      ],
+      [
+        -0.0,
+        1.0,
+        -0.0
+      ]
+    ],
+    "world_transform_trans_mm": [
+      -0.0,
+      -32.75,
+      149.0
+    ],
+    "world_bbox_min_mm": [
+      -19.01,
+      -48.76,
+      110.49
+    ],
+    "world_bbox_max_mm": [
+      21.07,
+      -16.74,
+      160.51
+    ],
+    "tris": 39294,
+    "stl_local_bbox_min_mm": [
+      -16.0,
+      -38.5,
+      -19.0
+    ],
+    "stl_local_bbox_max_mm": [
+      16.0,
+      11.5,
+      21.045
+    ],
+    "bytes": 1964784
+  },
+  {
+    "stl": "dynamixel4.stl",
+    "occurrence": "AX-serise v1:4",
+    "proposed_role": "dynamixel4",
+    "world_transform_rot": [
+      [
+        0.0,
+        0.0,
+        1.0
+      ],
+      [
+        1.0,
+        -0.0,
+        -0.0
+      ],
+      [
+        -0.0,
+        1.0,
+        -0.0
+      ]
+    ],
+    "world_transform_trans_mm": [
+      0.0,
+      -32.75,
+      266.5
+    ],
+    "world_bbox_min_mm": [
+      -19.01,
+      -48.76,
+      227.99
+    ],
+    "world_bbox_max_mm": [
+      21.07,
+      -16.74,
+      278.01
+    ],
+    "tris": 39294,
+    "stl_local_bbox_min_mm": [
+      -16.0,
+      -38.5,
+      -19.0
+    ],
+    "stl_local_bbox_max_mm": [
+      16.0,
+      11.5,
+      21.045
+    ],
+    "bytes": 1964784
+  },
+  {
+    "stl": "dynamixel5.stl",
+    "occurrence": "AX-serise v1:5",
+    "proposed_role": "dynamixel5(tip motor)",
+    "world_transform_rot": [
+      [
+        0.0,
+        0.0,
+        1.0
+      ],
+      [
+        1.0,
+        -0.0,
+        -0.0
+      ],
+      [
+        -0.0,
+        1.0,
+        -0.0
+      ]
+    ],
+    "world_transform_trans_mm": [
+      0.0,
+      -32.75,
+      384.0
+    ],
+    "world_bbox_min_mm": [
+      -19.01,
+      -48.76,
+      345.49
+    ],
+    "world_bbox_max_mm": [
+      21.07,
+      -16.74,
+      395.51
+    ],
+    "tris": 39294,
+    "stl_local_bbox_min_mm": [
+      -16.0,
+      -38.5,
+      -19.0
+    ],
+    "stl_local_bbox_max_mm": [
+      16.0,
+      11.5,
+      21.045
+    ],
+    "bytes": 1964784
+  },
+  {
+    "stl": "comp_1_1.stl",
+    "occurrence": "구성요소1:1",
+    "proposed_role": "?",
+    "world_transform_rot": [
+      [
+        1.0,
+        0.0,
+        -0.0
+      ],
+      [
+        -0.0,
+        1.0,
+        -0.0
+      ],
+      [
+        -0.0,
+        -0.0,
+        1.0
+      ]
+    ],
+    "world_transform_trans_mm": [
+      0.0,
+      0.0,
+      -0.0
+    ],
+    "world_bbox_min_mm": [
+      -24.02,
+      -49.67,
+      134.01
+    ],
+    "world_bbox_max_mm": [
+      24.01,
+      -15.83,
+      247.32
+    ],
+    "tris": 3352,
+    "stl_local_bbox_min_mm": [
+      -24.0,
+      -49.65,
+      134.029
+    ],
+    "stl_local_bbox_max_mm": [
+      24.0,
+      -15.85,
+      247.3
+    ],
+    "bytes": 167684
+  },
+  {
+    "stl": "comp_1_2.stl",
+    "occurrence": "구성요소1:2",
+    "proposed_role": "?",
+    "world_transform_rot": [
+      [
+        1.0,
+        0.0,
+        -0.0
+      ],
+      [
+        -0.0,
+        1.0,
+        -0.0
+      ],
+      [
+        -0.0,
+        -0.0,
+        1.0
+      ]
+    ],
+    "world_transform_trans_mm": [
+      0.0,
+      0.0,
+      117.5
+    ],
+    "world_bbox_min_mm": [
+      -24.02,
+      -49.67,
+      251.51
+    ],
+    "world_bbox_max_mm": [
+      24.01,
+      -15.83,
+      364.82
+    ],
+    "tris": 3352,
+    "stl_local_bbox_min_mm": [
+      -24.0,
+      -49.65,
+      134.029
+    ],
+    "stl_local_bbox_max_mm": [
+      24.0,
+      -15.85,
+      247.3
+    ],
+    "bytes": 167684
+  },
+  {
+    "stl": "comp_2_1.stl",
+    "occurrence": "구성요소2:1",
+    "proposed_role": "?",
+    "world_transform_rot": [
+      [
+        1.0,
+        0.0,
+        0.0
+      ],
+      [
+        0.0,
+        1.0,
+        0.0
+      ],
+      [
+        0.0,
+        0.0,
+        1.0
+      ]
+    ],
+    "world_transform_trans_mm": [
+      0.0,
+      0.0,
+      0.0
+    ],
+    "world_bbox_min_mm": [
+      -60.04,
+      -60.01,
+      80.59
+    ],
+    "world_bbox_max_mm": [
+      60.04,
+      60.01,
+      166.01
+    ],
+    "tris": 2790,
+    "stl_local_bbox_min_mm": [
+      -59.998,
+      -60.0,
+      80.6
+    ],
+    "stl_local_bbox_max_mm": [
+      59.998,
+      59.997,
+      166.0
+    ],
+    "bytes": 139584
+  },
+  {
+    "stl": "comp_3_1.stl",
+    "occurrence": "구성요소3:1",
+    "proposed_role": "?",
+    "world_transform_rot": [
+      [
+        1.0,
+        0.0,
+        0.0
+      ],
+      [
+        0.0,
+        1.0,
+        0.0
+      ],
+      [
+        0.0,
+        0.0,
+        1.0
+      ]
+    ],
+    "world_transform_trans_mm": [
+      0.0,
+      0.0,
+      0.0
+    ],
+    "world_bbox_min_mm": [
+      -60.01,
+      -60.01,
+      44.99
+    ],
+    "world_bbox_max_mm": [
+      60.01,
+      60.01,
+      88.01
+    ],
+    "tris": 26592,
+    "stl_local_bbox_min_mm": [
+      -60.0,
+      -59.996,
+      45.0
+    ],
+    "stl_local_bbox_max_mm": [
+      59.996,
+      60.0,
+      88.0
+    ],
+    "bytes": 1329684
+  },
+  {
+    "stl": "comp_4_1.stl",
+    "occurrence": "구성요소4:1",
+    "proposed_role": "?",
+    "world_transform_rot": [
+      [
+        1.0,
+        0.0,
+        0.0
+      ],
+      [
+        0.0,
+        1.0,
+        0.0
+      ],
+      [
+        0.0,
+        0.0,
+        1.0
+      ]
+    ],
+    "world_transform_trans_mm": [
+      0.0,
+      0.0,
+      0.0
+    ],
+    "world_bbox_min_mm": [
+      -30.01,
+      -62.76,
+      368.12
+    ],
+    "world_bbox_max_mm": [
+      30.01,
+      -2.74,
+      434.01
+    ],
+    "tris": 4808,
+    "stl_local_bbox_min_mm": [
+      -29.991,
+      -62.75,
+      368.129
+    ],
+    "stl_local_bbox_max_mm": [
+      29.991,
+      -2.75,
+      434.0
+    ],
+    "bytes": 240484
+  }
+]

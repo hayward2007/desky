@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>서보 컨트롤</title>
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; padding: 24px;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: #f5f5f4; color: #1c1c1a;
+      display: flex; flex-direction: column; align-items: center;
+    }
+    .card {
+      background: #fff; border-radius: 16px; padding: 28px 24px;
+      width: 100%; max-width: 380px; box-shadow: 0 1px 3px rgba(0,0,0,.08);
+    }
+    h1 { margin: 0 0 4px; font-size: 20px; font-weight: 600; }
+    .sub { margin: 0 0 24px; font-size: 13px; color: #78776f; }
+    .angle { font-size: 44px; font-weight: 600; text-align: center; margin: 8px 0 20px; }
+    .angle span { font-size: 20px; color: #78776f; }
+    input[type=range] { width: 100%; margin-bottom: 20px; accent-color: #c8532f; }
+    .row { display: flex; gap: 8px; margin-bottom: 12px; }
+    button {
+      flex: 1; padding: 14px 0; font-size: 15px; font-family: inherit;
+      border: 1px solid #ddd; border-radius: 10px; background: #fff;
+      color: #1c1c1a; cursor: pointer;
+    }
+    button:active { background: #eee; }
+    button.primary { background: #c8532f; border-color: #c8532f; color: #fff; }
+    #status {
+      margin-top: 16px; padding: 10px; border-radius: 8px;
+      font-size: 13px; text-align: center; background: #f0efe9; color: #57564f;
+    }
+    #status.err { background: #fcebeb; color: #a32d2d; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>서보 컨트롤</h1>
+    <p class="sub">라즈베리파이 GPIO18 · MG90</p>
+
+    <div class="angle"><b id="val">90</b><span>도</span></div>
+    <input type="range" id="slider" min="0" max="180" value="90">
+
+    <div class="row">
+      <button onclick="send(0)">0도</button>
+      <button onclick="send(90)">90도</button>
+      <button onclick="send(180)">180도</button>
+    </div>
+    <div class="row">
+      <button class="primary" onclick="sweep()">왕복 테스트</button>
+    </div>
+
+    <div id="status">준비됨</div>
+  </div>
+
+<script>
+  const slider = document.getElementById("slider");
+  const val = document.getElementById("val");
+  const statusEl = document.getElementById("status");
+
+  function setStatus(text, isError) {
+    statusEl.textContent = text;
+    statusEl.className = isError ? "err" : "";
+  }
+
+  async function send(angle) {
+    val.textContent = Math.round(angle);
+    slider.value = angle;
+    try {
+      const res = await fetch("/api/servo", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ angle })
+      });
+      const data = await res.json();
+      if (!res.ok) return setStatus(data.error || ("오류 " + res.status), true);
+      setStatus(`${data.angle}도로 이동${data.mode === "mock" ? " (모의 모드)" : ""}`);
+    } catch (e) {
+      setStatus("서버에 연결하지 못했습니다", true);
+    }
+  }
+
+  // 슬라이더를 끄는 동안 매 픽셀마다 요청하면 서보가 따라오지 못하고 밀린다.
+  // 마지막 값만 100ms 간격으로 보낸다.
+  let pending = null, timer = null;
+  slider.addEventListener("input", () => {
+    val.textContent = slider.value;
+    pending = slider.value;
+    if (timer) return;
+    timer = setTimeout(() => {
+      timer = null;
+      if (pending !== null) { send(pending); pending = null; }
+    }, 100);
+  });
+
+  async function sweep() {
+    for (const a of [60, 120, 60, 120, 90]) {
+      await send(a);
+      await new Promise(r => setTimeout(r, 600));
+    }
+  }
+
+  fetch("/api/status").then(r => r.json()).then(d => {
+    slider.value = d.angle; val.textContent = Math.round(d.angle);
+    setStatus(d.mode === "mock" ? "모의 모드 — GPIO 라이브러리 없음" : `연결됨 (${d.mode})`);
+  }).catch(() => setStatus("서버에 연결하지 못했습니다", true));
+</script>
+</body>
+</html>
