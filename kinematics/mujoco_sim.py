@@ -60,6 +60,18 @@ _AXIS_COLORS = [
 ]
 
 
+def _reclamp_all(arm, q):
+    """Re-clamp every joint against its current coupled partner's angle (if
+    any). Needed because moving one joint (e.g. joint3) can push another
+    joint (e.g. joint2) outside the range that's now safe for it, even if
+    that other joint didn't move itself — see Joint.coupled_table."""
+    q = q[:]
+    for i, joint in enumerate(arm.joints):
+        q_other = q[arm.id_to_index[joint.coupled_with]] if joint.coupled_with is not None else None
+        q[i] = joint.clamp(q[i], q_other=q_other)
+    return q
+
+
 def _draw_joint_axes(viewer, model, data):
     scn = viewer.user_scn
     scn.ngeom = 0
@@ -149,9 +161,13 @@ def main():
                 try:
                     if cmd == "fk" and len(parts) == 3:
                         jid, deg = int(parts[1]), float(parts[2])
-                        idx = next(i for i, j in enumerate(arm.joints) if j.id == jid)
+                        idx = arm.id_to_index[jid]
+                        joint = arm.joints[idx]
+                        q_other = q[arm.id_to_index[joint.coupled_with]] \
+                            if joint.coupled_with is not None else None
                         q_new = q[:]
-                        q_new[idx] = arm.joints[idx].clamp(arm.joints[idx].q_from_servo(deg))
+                        q_new[idx] = joint.clamp(joint.q_from_servo(deg), q_other=q_other)
+                        q_new = _reclamp_all(arm, q_new)
                         apply(q_new)
                         Logger.log("SIM", f"end-effector: {tuple(round(v, 4) for v in arm.fk(q))}")
                     elif cmd == "ik" and len(parts) == 4:
@@ -169,7 +185,7 @@ def main():
                         break
                     else:
                         Logger.log("SIM", f"unrecognized command: {line!r}")
-                except (ValueError, StopIteration):
+                except (ValueError, StopIteration, KeyError):
                     Logger.log("SIM", f"bad command: {line!r}")
 
             _draw_joint_axes(viewer, model, data)

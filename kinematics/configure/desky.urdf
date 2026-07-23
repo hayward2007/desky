@@ -226,18 +226,30 @@
     </collision>
   </link>
 
-  <!-- No visual: a bare marker frame at comp_4_1's own bounding-box centre. Needed
-       because comp_4_1's Fusion world_transform is coincidentally identity (its
-       mesh vertices are already absolute), which would otherwise make the
-       end_effector link's own frame land at the assembly's design origin instead
-       of anywhere near the actual phone mount. -->
+  <!-- No visual: a bare marker frame at the centre of end_effector's FAR face
+       (farthest from joint5/dynamixel5, i.e. the actual mount surface a phone
+       or camera sits against) — not the mesh's bounding-box centre. The mesh's
+       local bbox is x:[-30,30] y:[-62.75,-2.75] z:[368.13,434.0] mm (comp_4_1's
+       Fusion world_transform is coincidentally identity, so its STL vertices
+       are already in this "absolute-looking" local frame); box centre would be
+       z=401.06, but z=434.0 (verified the farther one from joint5 by composing
+       the full FK chain) is the outward face, so x/y stay at the box's centre
+       (0, -32.75) and only z moves to the far edge. This is the point
+       kinematics.Arm.fk()/tool_offset reports as the end-effector position. -->
   <link name="tool_tip"/>
 
   <!-- ===================== Joints ===================== -->
   <joint name="base_shell_joint" type="fixed">
     <parent link="base_link"/>
     <child link="base_shell"/>
-    <origin xyz="0 0 0" rpy="0 0 0"/>
+    <!-- -90 deg about Z: the Fusion export's whole assembly sat rotated 90 deg
+         off from the intended world frame. This is the one place to correct
+         it — before joint1, so joint1's own axis (world Z, yaw) is untouched
+         (a Z rotation can't change the Z axis) while every downstream frame
+         rotates with it, landing joint2's axis on world +X (was +Y) and
+         joints 3/4/5's shared axis on world -Y (was +X). Relative geometry
+         between links, so self-collision-free limits, are unchanged. -->
+    <origin xyz="0 0 0" rpy="0 0 -1.5708"/>
   </joint>
 
   <joint name="joint1" type="revolute">
@@ -266,7 +278,18 @@
     <child link="dynamixel2"/>
     <origin xyz="0 0.01525 0" rpy="1.5708 0 3.14159"/>
     <axis xyz="0 0 1"/>                          <!-- roll : shaft along world Y -->
-    <limit lower="-1.53589" upper="1.53589" effort="1.5" velocity="6.0"/>
+    <limit lower="-0.13090" upper="0.13090" effort="1.5" velocity="6.0"/>
+    <coupled_limit joint="joint3">
+      <point q="-1.14319" lower="-0.13090" upper="0.13090"/>
+      <point q="-0.80285" lower="-1.35263" upper="1.35263"/>
+      <point q="-0.46251" lower="-1.40499" upper="1.40499"/>
+      <point q="-0.12217" lower="-1.49226" upper="1.49226"/>
+      <point q="0.21817" lower="-1.46608" upper="1.46608"/>
+      <point q="0.55851" lower="-1.38754" upper="1.38754"/>
+      <point q="0.89884" lower="-1.34390" upper="1.34390"/>
+      <point q="1.23918" lower="-1.34390" upper="1.34390"/>
+      <point q="1.57952" lower="-1.37008" upper="1.37008"/>
+    </coupled_limit>
     <dynamixel id="2" model="AX-18A" home_deg="180" direction="-1"/>
   </joint>
 
@@ -311,7 +334,7 @@
     <child link="dynamixel5"/>
     <origin xyz="0 -0.03275 0.2665" rpy="1.5708 0 1.5708"/>
     <axis xyz="0 0 1"/>                          <!-- pitch (wrist) : shaft along world X -->
-    <limit lower="-3.10669" upper="2.05949" effort="1.5" velocity="6.0"/>
+    <limit lower="-1.57080" upper="1.57080" effort="1.5" velocity="6.0"/>
     <dynamixel id="5" model="AX-18A" home_deg="180" direction="1"/>
   </joint>
 
@@ -324,7 +347,7 @@
   <joint name="tool_tip_joint" type="fixed">
     <parent link="end_effector"/>
     <child link="tool_tip"/>
-    <origin xyz="0 -0.03275 0.401065" rpy="0 0 0"/>
+    <origin xyz="0 -0.03275 0.434" rpy="0 0 0"/>
   </joint>
 
 </robot>

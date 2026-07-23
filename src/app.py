@@ -173,6 +173,9 @@ def index():
     return render_template(
         "index.html",
         joint_ids=[joint.id for joint in arm.joints],
+        joint_ranges={joint.id: _joint_slider_range(joint) for joint in arm.joints},
+        coupled_joints={joint.id: joint.coupled_with for joint in arm.joints
+                        if joint.coupled_with is not None},
         hardware_connected=arm_ctrl is not None,
         hardware_error=hardware_error,
     )
@@ -231,6 +234,39 @@ def _parse_degrees(data):
         return None, (jsonify({"error": "degrees must be numbers"}), 400)
 
 
+def _joint_slider_range(joint):
+    """(min_deg, max_deg, home_deg) for this joint's UI slider, derived from
+    its URDF <limit> (kinematics/find_joint_limits.py — self-collision-aware,
+    not just the servo's 0-300 deg physical range). For a coupled joint
+    (currently just joint2, see Joint.coupled_table) this is the
+    conservative bound that holds no matter what its partner joint is doing;
+    _servo_degs_within_limits does the live, coupling-aware check server-side
+    before anything actually moves."""
+    lo_deg, hi_deg = sorted((joint.servo_deg(joint.q_min), joint.servo_deg(joint.q_max)))
+    return lo_deg, hi_deg, joint.home_deg
+
+
+def _servo_degs_within_limits(servo_degs):
+    """Check servo_degs (one per joint, arm.joints order) against each
+    joint's self-collision-aware bounds, resolving joint2's coupling to
+    joint3 using the angles in this SAME servo_degs vector (not whatever the
+    arm is currently doing) — the values that would actually be commanded
+    together. Returns None if all are within range, else a message naming
+    the first joint that isn't."""
+    q = arm.servo_deg_to_q(servo_degs)
+    for i, joint in enumerate(arm.joints):
+        q_other = q[arm.id_to_index[joint.coupled_with]] if joint.coupled_with is not None else None
+        lo, hi = joint.bounds(q_other=q_other)
+        if lo - 1e-9 <= q[i] <= hi + 1e-9:
+            continue
+        lo_deg, hi_deg = sorted((joint.servo_deg(lo), joint.servo_deg(hi)))
+        coupling_note = f" (depends on joint{joint.coupled_with}'s current angle)" \
+            if joint.coupled_with is not None else ""
+        return (f"joint{joint.id} servo={servo_degs[i]:.1f} deg is outside its "
+                f"self-collision-safe range [{lo_deg:.1f}, {hi_deg:.1f}] deg{coupling_note}")
+    return None
+
+
 @app.route("/api/fk", methods=["POST"])
 def fk():
     """Forward kinematics only — compute the end-effector position for a set of
@@ -240,7 +276,10 @@ def fk():
     if err:
         return err
     q = arm.servo_deg_to_q(degs)
-    return jsonify({"position": list(arm.fk(q))})
+    return jsonify({
+        "position": list(arm.fk(q)),
+        "within_limits": _servo_degs_within_limits(degs) is None,
+    })
 
 
 @app.route("/api/render", methods=["POST"])
@@ -298,6 +337,10 @@ def goto_joints():
     if err:
         return err
 
+    limit_error = _servo_degs_within_limits(degs)
+    if limit_error:
+        return jsonify({"error": limit_error}), 400
+
     Logger.log("WEBAPP", f"goto_joints request: degrees={degs}")
     try:
         pos = arm_ctrl.goto_joints(degs)
@@ -321,6 +364,19 @@ def goto_joint():
     actuator = next((a for a in arm_ctrl.actuators if a.id == joint_id), None)
     if actuator is None:
         return jsonify({"error": f"no actuator with id {joint_id}"}), 404
+    if joint_id not in arm.id_to_index:
+        return jsonify({"error": f"no joint with id {joint_id}"}), 404
+
+    # This joint moves alone, but a coupled joint's (e.g. joint2's) safe range
+    # depends on where every OTHER joint currently is — so check against the
+    # rest of the arm's live pose (or home, if it isn't known yet) with just
+    # this one joint's degree swapped in.
+    current_q = _current_q() or [0.0] * len(arm.joints)
+    servo_degs = arm.q_to_servo_deg(current_q)
+    servo_degs[arm.id_to_index[joint_id]] = degree
+    limit_error = _servo_degs_within_limits(servo_degs)
+    if limit_error:
+        return jsonify({"error": limit_error}), 400
 
     Logger.log("WEBAPP", f"goto_joint request: id={joint_id} degree={degree}")
     try:

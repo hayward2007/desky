@@ -102,10 +102,22 @@ def load_arm(path=None):
                 jid = len(arm_joints) + 1
                 home_deg, direction = 150.0, 1
 
+            coupled_with, coupled_table = None, None
+            cl = j.find("coupled_limit")
+            if cl is not None:
+                # "jointN" -> other joint's dynamixel id N (this project's
+                # naming convention: joint name and dynamixel id always match).
+                coupled_with = int("".join(ch for ch in cl.get("joint") if ch.isdigit()))
+                coupled_table = sorted(
+                    (float(p.get("q")), float(p.get("lower")), float(p.get("upper")))
+                    for p in cl.findall("point")
+                )
+
             arm_joints.append(Joint(
                 id=jid, axis=axis, offset=offset, rpy=eff_rpy,
                 home_deg=home_deg, direction=direction,
-                q_min=q_min, q_max=q_max, name=j.get("name")))
+                q_min=q_min, q_max=q_max, name=j.get("name"),
+                coupled_with=coupled_with, coupled_table=coupled_table))
             pending = _translate(0, 0, 0)  # reset accumulator after consuming
         # fixed joints just keep accumulating into `pending`
 
