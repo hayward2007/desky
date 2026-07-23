@@ -24,22 +24,31 @@ GEMINI_API_KEY isn't set (or the google-genai package isn't installed), those
 routes report "not configured" instead of crashing the app, same as the
 hardware fallback.
 
-Hand tracking (perception.hand_tracker.HandTracker/HandFollower) and face
-tracking (perception.face_tracker.FaceTracker/FaceFollower) both run in
-run()'s local preview loop, not as Flask routes — same detect → overlay →
-place-in-3D-scene pipeline for each, every frame. Their outputs feed a single
-perception.follow_controller.FollowController, which decides what the arm
-should do next with face > hand > idle priority: a visible face is tracked
-(FaceFollower — yaw rotation to re-center sideways, height (z) moves to
-re-center up/down, see its docstring); with no face but a visible hand, the
-hand is tracked instead (HandFollower — screen-center offset re-centers
-sideways/up-down via translation, depth partially corrected); with neither
-visible, the arm returns to
-FollowController.IDLE_POSITION and then, once there, sweeps joint 1 (yaw)
-back and forth around that pose ("looking around") until a face or hand
-reappears. run() is the only place that actually commands hardware from
-FollowController's output — none of face_tracker/hand_tracker/
-follow_controller has a hardware dependency themselves.
+Face tracking (perception.face_tracker.FaceTracker/FaceFollower, mediapipe
+FaceMesh) runs server-side in run()'s local preview loop. Hand tracking does
+NOT — the phone runs its own MediaPipe Tasks Vision HandLandmarker
+(mobile.html) and sends only the landmarks over /ws/camera; the server
+(perception.hand_tracker.HandTracker) just turns those into world coordinates
++ overlays (see its module docstring for why: a single computer doing
+mediapipe inference for both hands AND faces, plus the matplotlib 3D preview,
+plus hardware I/O, every frame, couldn't keep up with the phone's ~20fps —
+splitting hand detection onto the phone was the fix). Both trackers' outputs
+feed a single perception.follow_controller.FollowController, which decides
+what the arm should do next with face > hand > idle priority: a visible face
+is tracked (FaceFollower — yaw rotation to re-center sideways, height (z)
+moves to re-center up/down, see its docstring); with no face but a visible
+hand, the hand is tracked instead (HandFollower — screen-center offset
+re-centers sideways/up-down via translation, depth partially corrected); with
+neither visible, the arm returns to FollowController.IDLE_POSITION and then,
+once there, sweeps joint 1 (yaw) back and forth around that pose ("looking
+around") until a face or hand reappears. run() is the only place that
+actually commands hardware from FollowController's output (rate-limited via
+AppConst.COMMAND_MIN_INTERVAL_S — commanding a new goto on every ~20fps frame
+made the arm's motion look jittery) — none of face_tracker/hand_tracker/
+follow_controller has a hardware dependency themselves. The local preview
+windows (cv2 + matplotlib 3D scene) are throttled independently
+(AppConst.VIS_MIN_INTERVAL_S), since matplotlib's render cost was the main
+thing keeping this loop from following the phone's frame rate.
 
 Run from the repository root:
     python -m webapp.app
@@ -416,16 +425,22 @@ def run():
 
     Logger.log("CAMERA", "Press 'q' in the camera window (or Ctrl+C here) to quit")
     last_frame_count = 0
+    last_vis_time = 0.0
+    last_command_time = 0.0
 
     initialize_position()
 
-    # perception.hand_tracker.HandTracker wraps mediapipe: if mediapipe isn't
-    # installed, `tracker.available` is False and process()/draw_overlay() are
-    # no-ops, so the camera window still runs without hand detection.
-    tracker = HandTracker(max_num_hands=2, min_detection_confidence=0.5, min_tracking_confidence=0.5)
+    # perception.hand_tracker.HandTracker no longer runs mediapipe itself —
+    # hand detection happens on the phone (mobile.html's MediaPipe Tasks
+    # Vision HandLandmarker); this object just turns the landmarks it sends
+    # (via camera.latest_hand_landmarks()) into world coordinates + overlays.
+    tracker = HandTracker()
 
-    # perception.face_tracker.FaceTracker — same partial-failure pattern as
-    # the hand tracker.
+    # perception.face_tracker.FaceTracker — mediapipe FaceMesh still runs
+    # server-side (see module docstrings in perception.hand_tracker/app.py's
+    # own docstring for why only hands moved to the phone). Same
+    # partial-failure pattern: if mediapipe isn't installed, `available` is
+    # False and process()/draw_overlay() are no-ops.
     face_tracker = FaceTracker(max_num_faces=1, min_detection_confidence=0.5, min_tracking_confidence=0.5)
 
     # perception.follow_controller.FollowController owns the face > hand >
@@ -460,14 +475,14 @@ def run():
                 rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
 
                 # mediapipe's cost scales with pixel count, and the phone can
-                # arrive at a high enough resolution that running BOTH
-                # trackers on the full frame can't keep up with its ~20fps —
-                # so detection runs on a downscaled copy. Landmarks are
-                # normalized (0..1), so accuracy is unaffected as long as the
-                # resize preserves aspect ratio; frame.shape (the ORIGINAL
-                # size) is still what's passed to process() below, since
-                # estimate_depth's pinhole math is calibrated against the
-                # real camera's field of view, not the detection copy's size.
+                # arrive at a high enough resolution that face detection alone
+                # can't keep up with its ~20fps — so detection runs on a
+                # downscaled copy. Landmarks are normalized (0..1), so
+                # accuracy is unaffected as long as the resize preserves
+                # aspect ratio; frame.shape (the ORIGINAL size) is still what's
+                # passed to process() below, since estimate_depth's pinhole
+                # math is calibrated against the real camera's field of view,
+                # not the detection copy's size.
                 proc_height, proc_width = rgb.shape[:2]
                 if proc_width > _MEDIAPIPE_MAX_WIDTH:
                     scale = _MEDIAPIPE_MAX_WIDTH / proc_width
@@ -478,40 +493,59 @@ def run():
                     rgb_proc = rgb
 
                 faces = face_tracker.process(rgb_proc, T_ee, frame.shape)
-                face_tracker.draw_overlay(frame, faces)
 
-                # Hands are only ever acted on when no face is visible
-                # (FollowController's priority is face > hand > idle), so
-                # running mediapipe Hands at all is wasted work on every
-                # frame a face was just found on.
-                hands = tracker.process(rgb_proc, T_ee, frame.shape) if not faces else []
-                tracker.draw_overlay(frame, hands)
+                # Hands: no server-side detection anymore — the phone already
+                # ran MediaPipe Tasks Vision on this same frame and sent the
+                # landmarks over /ws/camera (see perception.hand_tracker's
+                # module docstring). This is just coordinate math, not model
+                # inference, so there's no reason to skip it even when a face
+                # was found (unlike the old mediapipe-Hands version).
+                raw_hands = camera.latest_hand_landmarks()
+                hands = tracker.process_landmarks(raw_hands, T_ee, frame.shape) if raw_hands else []
 
-                if frame is not None:
-                    cv2.imshow("Mobile camera", frame)
-
-                # 3D scene: current robot pose plus any detected hand(s)/face,
-                # placed relative to the end-effector (the phone/camera
-                # mount) via forward kinematics.
-                draw_pose(ax3d, arm, _root_link, _chain, _visuals, q, _render_bounds)
-                tracker.draw_forward_axis_debug(ax3d, T_ee, _render_bounds[3] * 0.25)
-                tracker.draw_hands_3d(ax3d, hands)
-                face_tracker.draw_faces_3d(ax3d, faces)
-                canvas3d.draw()
-                scene = cv2.cvtColor(np.asarray(canvas3d.buffer_rgba()), cv2.COLOR_RGBA2BGR)
-                cv2.imshow("3D scene (robot + hand/face)", scene)
+                now = time.monotonic()
 
                 if arm_ctrl is not None:
                     # FollowController decides WHERE, WHEN, and HOW (face vs.
                     # hand vs. idle/look-around, full 3D reposition vs.
-                    # yaw-only) — see its docstring.
+                    # yaw-only) — see its docstring. Evaluated every frame so
+                    # its internal state (idle/returning/looking-around) stays
+                    # current, but the actual hardware write is throttled
+                    # below — issuing a new goto on every ~20fps frame made
+                    # the arm restart its motion constantly and look jittery.
                     command = follow_controller.next_command(faces, hands, T_ee, q)
-                    if command is not None:
+                    if command is not None and now - last_command_time >= AppConst.COMMAND_MIN_INTERVAL_S:
+                        last_command_time = now
                         kind, payload = command
                         if kind == "position":
                             arm_ctrl.goto_position(payload)
                         elif kind == "joints":
                             arm_ctrl.goto_joints(payload)
+
+                # Local preview windows (cv2 camera view + matplotlib 3D
+                # scene) are a debug aid, not something the robot's behavior
+                # depends on — and matplotlib's 3D render is far more
+                # expensive than the detection above, so redrawing it on
+                # every processed frame was the main reason this loop
+                # couldn't keep up with the phone's ~20fps. Throttled
+                # independently of the decision logic above.
+                if now - last_vis_time >= AppConst.VIS_MIN_INTERVAL_S:
+                    last_vis_time = now
+                    face_tracker.draw_overlay(frame, faces)
+                    tracker.draw_overlay(frame, hands)
+                    if frame is not None:
+                        cv2.imshow("Mobile camera", frame)
+
+                    # 3D scene: current robot pose plus any detected hand(s)/
+                    # face, placed relative to the end-effector (the phone/
+                    # camera mount) via forward kinematics.
+                    draw_pose(ax3d, arm, _root_link, _chain, _visuals, q, _render_bounds)
+                    tracker.draw_forward_axis_debug(ax3d, T_ee, _render_bounds[3] * 0.25)
+                    tracker.draw_hands_3d(ax3d, hands)
+                    face_tracker.draw_faces_3d(ax3d, faces)
+                    canvas3d.draw()
+                    scene = cv2.cvtColor(np.asarray(canvas3d.buffer_rgba()), cv2.COLOR_RGBA2BGR)
+                    cv2.imshow("3D scene (robot + hand/face)", scene)
             # waitKey both drives HighGUI's event loop (without it the window
             # never actually renders/refreshes) and lets 'q'/Esc quit.
             key = cv2.waitKey(1) & 0xFF
@@ -521,7 +555,6 @@ def run():
         pass
     finally:
         cv2.destroyAllWindows()
-        tracker.close()
         face_tracker.close()
 
 

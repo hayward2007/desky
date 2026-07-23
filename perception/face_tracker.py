@@ -27,7 +27,7 @@ import math
 
 from kinematics.simulate import draw_points
 from kinematics.urdf_loader import load_arm
-from fundamental.const import FaceTrackerConst, FaceFollowerConst
+from fundamental.const import CameraGeometryConst, FaceTrackerConst, FaceFollowerConst
 from fundamental.logger import Logger
 from perception.camera_geometry import camera_frame, clamp_xy
 
@@ -53,7 +53,7 @@ class FaceTracker:
     """
 
     # 상수 설명은 fundamental.const.FaceTrackerConst 참고.
-    FOCAL_NORM = FaceTrackerConst.FOCAL_NORM
+    FOCAL_NORM = CameraGeometryConst.FOCAL_NORM
     EYE_OUTER_DISTANCE_M = FaceTrackerConst.EYE_OUTER_DISTANCE_M
     LEFT_EYE_OUTER = FaceTrackerConst.LEFT_EYE_OUTER
     RIGHT_EYE_OUTER = FaceTrackerConst.RIGHT_EYE_OUTER
@@ -195,7 +195,7 @@ class FaceFollower:
     """
 
     # 상수 설명은 fundamental.const.FaceFollowerConst 참고.
-    CENTER_OFFSET_THRESHOLD = FaceFollowerConst.CENTER_OFFSET_THRESHOLD
+    CENTER_OFFSET_THRESHOLD = CameraGeometryConst.CENTER_OFFSET_THRESHOLD
     YAW_GAIN = FaceFollowerConst.YAW_GAIN
     YAW_STEP_LIMIT = FaceFollowerConst.YAW_STEP_LIMIT
     HEIGHT_GAIN = FaceFollowerConst.HEIGHT_GAIN

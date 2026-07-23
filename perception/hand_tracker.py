@@ -1,39 +1,65 @@
-"""MediaPipe 손 인식 + 인식된 손을 3D 월드 좌표로 올리는 모듈.
+"""휴대폰이 인식한 손 랜드마크를 3D 월드 좌표로 올리는 모듈.
 
-핵심 아이디어: 휴대폰 카메라는 end-effector에 달려 있으므로, 손의 "화면상 크기"
-로부터 카메라까지의 거리를 역산하고(핀홀 모델), 그 거리를 이용해 손 랜드마크를
-end-effector 좌표계 → 월드 좌표계로 변환한다. 그러면 로봇팔이 움직여도 손이
-3D 씬 안의 올바른 위치에 그려진다.
+손 인식(MediaPipe HandLandmarker) 자체는 더 이상 서버가 하지 않는다 —
+`src/templates/mobile.html`이 휴대폰에서 직접 MediaPipe Tasks Vision을 돌려
+21개 랜드마크만(이미지 아님) 웹소켓(`/ws/camera`)으로 보내고, `src.api.camera.Camera`가
+그걸 받아 저장한다. 서버는 얼굴 인식(perception.face_tracker, mediapipe FaceMesh)만
+전담한다 — 컴퓨터 하나가 얼굴+손 인식을 mediapipe로 전부 처리하면 휴대폰이 실제로
+보내는 ~20fps를 못 따라가 로봇 반응이 느려지고 뚝뚝 끊겼기 때문에 나눈 것.
 
-`HandTracker`(인식 + 좌표변환 + 시각화)와 `HandFollower`(손 위치를 따라 로봇이
-이동할 목표 계산)로 나뉜다 — 전자는 카메라 프레임만 입력받는 순수 인지 기능,
-후자는 그 결과를 소비하는 상태 머신이라 책임이 다르다. 실제 하드웨어 이동
-명령(IK 포함)은 이 모듈이 하지 않는다 — perception 패키지는 하드웨어에
+핵심 아이디어(인식 주체가 바뀌어도 동일): 휴대폰 카메라는 end-effector에 달려
+있으므로, 손의 "화면상 크기"로부터 카메라까지의 거리를 역산하고(핀홀 모델),
+그 거리를 이용해 손 랜드마크를 end-effector 좌표계 → 월드 좌표계로 변환한다.
+그러면 로봇팔이 움직여도 손이 3D 씬 안의 올바른 위치에 그려진다.
+
+`HandTracker`(좌표변환 + 시각화 — 랜드마크는 이미 계산되어 들어온다)와
+`HandFollower`(손 위치를 따라 로봇이 이동할 목표 계산)로 나뉜다. 실제 하드웨어
+이동 명령(IK 포함)은 이 모듈이 하지 않는다 — perception 패키지는 하드웨어에
 의존하지 않으므로, `HandFollower`는 "어디로, 언제" 움직여야 할지만 계산하고
 실제 `arm_ctrl.goto_position()` 호출(IK + 서보 명령)은 호출부(`src/app.py`)가
 한다.
 
-의존성: mediapipe, opencv-python, numpy, matplotlib(3D 시각화, kinematics.simulate)
+의존성: opencv-python, numpy, matplotlib(3D 시각화, kinematics.simulate).
+mediapipe는 더 이상 이 모듈의 의존성이 아니다(인식이 클라이언트로 옮겨갔으므로).
 """
 
 import math
+from collections import namedtuple
 
 from kinematics.simulate import draw_points
-from fundamental.const import HandTrackerConst, HandFollowerConst
-from fundamental.logger import Logger
+from fundamental.const import CameraGeometryConst, HandTrackerConst, HandFollowerConst
 from perception.camera_geometry import camera_frame as _camera_frame
 from perception.camera_geometry import clamp_xy as _clamp_xy
 
+# MediaPipe HandLandmarker의 21개 랜드마크 하나 — 휴대폰이 보내는 [x, y, z]
+# (또는 {x,y,z}) 원소를 이 형태로 감싸서, mediapipe가 서버에서 직접 돌던
+# 시절과 동일한 .x/.y/.z 속성 접근 코드(estimate_depth/landmark_to_world)를
+# 그대로 재사용한다.
+_Landmark = namedtuple("_Landmark", ["x", "y", "z"])
+
+# 표준 MediaPipe 21점 손 골격 연결 — 예전에는 mediapipe 라이브러리가 이미
+# 만들어 둔 `mp.solutions.hands.HAND_CONNECTIONS`를 그대로 썼지만, 서버가
+# 더 이상 mediapipe에 의존하지 않으므로 같은 위상(손목-엄지-검지-중지-약지-
+# 새끼)을 직접 하드코딩했다. 값 자체는 MediaPipe 손 모델 표준 정의와 동일.
+HAND_CONNECTIONS = [
+    (0, 1), (1, 2), (2, 3), (3, 4),          # 엄지
+    (0, 5), (5, 6), (6, 7), (7, 8),          # 검지
+    (5, 9), (9, 10), (10, 11), (11, 12),     # 중지
+    (9, 13), (13, 14), (14, 15), (15, 16),   # 약지
+    (13, 17), (17, 18), (18, 19), (19, 20),  # 새끀
+    (0, 17),                                  # 손목 - 새끼 (손바닥 밑변)
+]
+
 
 class Hand:
-    """인식된 손 하나. `landmarks`는 mediapipe의 21개 랜드마크,
+    """인식된 손 하나. `landmarks`는 `_Landmark`(x, y, z) 21개,
     `depth`는 추정된 카메라~손 거리(m), `world_points`는 월드 좌표 21개,
     `center`는 손바닥 중심(PALM_QUAD 네 점의 평균 월드 좌표),
     `screen_offset`은 그 중심이 화면 정중앙 (0.5, 0.5)에서 얼마나 벗어났는지
     (dx, dy), 정규화 이미지 좌표 기준(월드 변환 이전 원본 랜드마크에서 계산)."""
 
     def __init__(self, landmarks, depth, world_points, center, screen_offset):
-        """landmarks: mediapipe 랜드마크 객체, depth: 추정 거리(m),
+        """landmarks: `_Landmark` 21개, depth: 추정 거리(m),
         world_points: 월드 좌표 (x, y, z) 21개, center: 손바닥 중심 (x, y, z),
         screen_offset: 화면 중앙 대비 오프셋 (dx, dy), 정규화 좌표."""
         self.landmarks = landmarks
@@ -44,98 +70,62 @@ class Hand:
 
 
 class HandTracker:
-    """카메라 프레임에서 손을 찾아 3D 월드 좌표로 변환하는 객체.
+    """휴대폰이 보낸 손 랜드마크를 3D 월드 좌표로 변환하고 시각화하는 객체.
 
-    `with HandTracker() as tracker:` 형태로 쓰면 mediapipe 세션이 결정적으로
-    정리된다. mediapipe가 설치돼 있지 않으면 `available`이 False가 되고
-    `process()`는 항상 빈 리스트를 돌려준다 — 하드웨어/Gemini 미구성 때와
-    같은 "기능만 빠지고 앱은 계속 뜬다" 패턴.
+    인식(모델 추론) 자체는 하지 않는다 — `process_landmarks()`가 이미 계산된
+    랜드마크(휴대폰의 MediaPipe Tasks Vision HandLandmarker 결과)를 받아 좌표
+    변환/깊이 추정만 한다. 랜드마크가 없으면(휴대폰이 아직 안 보냈거나, 화면에
+    손이 없어서 빈 리스트를 보낸 경우) 항상 빈 리스트를 돌려준다 — 하드웨어/
+    Gemini 미구성 때와 같은 "기능만 빠지고 앱은 계속 뜬다" 패턴.
     """
 
     # 상수 설명은 fundamental.const.HandTrackerConst 참고.
-    FOCAL_NORM = HandTrackerConst.FOCAL_NORM
+    FOCAL_NORM = CameraGeometryConst.FOCAL_NORM
     WRIST_TO_THUMB_CMC_M = HandTrackerConst.WRIST_TO_THUMB_CMC_M
     PALM_QUAD = HandTrackerConst.PALM_QUAD
 
-    def __init__(self, max_num_hands=2, min_detection_confidence=0.8,
-                 min_tracking_confidence=0.8):
-        """mediapipe Hands 세션을 만든다. mediapipe import에 실패하면
-        조용히 비활성 상태(`available == False`)로 남는다."""
-        self.hands = None
-        self.error = None
-        self._mp = None
-        self._drawing = None
-        try:
-            import mediapipe as mp
-
-            self._mp = mp.solutions.hands
-            self._drawing = mp.solutions.drawing_utils
-            self.hands = self._mp.Hands(
-                static_image_mode=False,
-                max_num_hands=max_num_hands,
-                min_detection_confidence=min_detection_confidence,
-                min_tracking_confidence=min_tracking_confidence,
-            )
-            Logger.log("HAND", "MediaPipe hand tracker ready")
-        except Exception as e:
-            self.error = str(e)
-            Logger.log("HAND", f"Hand tracking disabled: {self.error}")
-
-    @property
-    def available(self) -> bool:
-        """mediapipe 세션이 정상적으로 만들어졌는지 여부."""
-        return self.hands is not None
-
     @property
     def connections(self):
-        """3D 씬에서 랜드마크를 잇는 데 쓰는 mediapipe의 손 골격 연결 목록."""
-        return self._mp.HAND_CONNECTIONS if self._mp is not None else None
-
-    def __enter__(self):
-        """컨텍스트 매니저 진입 — 그냥 자기 자신을 돌려준다."""
-        return self
-
-    def __exit__(self, exc_type, exc_value, traceback):
-        """컨텍스트 매니저 종료 — mediapipe 세션을 닫는다."""
-        self.close()
-
-    def close(self):
-        """mediapipe Hands 세션을 닫는다(내부 그래프/스레드 정리)."""
-        if self.hands is not None:
-            self.hands.close()
-            self.hands = None
+        """3D 씬에서 랜드마크를 잇는 데 쓰는 손 골격 연결 목록."""
+        return HAND_CONNECTIONS
 
     # ------------------------------------------------------------------
-    # 인식
+    # 인식(휴대폰이 이미 계산한 랜드마크를 좌표 변환만)
     # ------------------------------------------------------------------
-    def process(self, frame_rgb, T_ee, frame_shape) -> list:
-        """RGB 프레임 한 장에서 손을 찾아 `Hand` 리스트로 반환한다.
+    def process_landmarks(self, raw_hands, T_ee, frame_shape) -> list:
+        """휴대폰이 보낸 손 랜드마크(원시 좌표)를 `Hand` 리스트로 반환한다.
 
-        frame_rgb  : cv2.COLOR_BGR2RGB로 변환한 프레임 (mediapipe는 RGB를 받는다)
+        raw_hands  : 손마다 21개의 (x, y, z) — 리스트/튜플([x,y,z]) 또는
+                     {"x":.., "y":.., "z":..} 딕셔너리 모두 받는다. 빈 리스트면
+                     빈 리스트를 그대로 돌려준다(손 없음).
         T_ee       : 현재 end-effector의 4x4 월드 변환 행렬 (Arm.fk_matrix(q))
         frame_shape: (height, width, channels) — 정규화 좌표를 픽셀로 되돌릴 때 사용
         """
-        if not self.available:
-            return []
-
-        results = self.hands.process(frame_rgb)
-        if not results.multi_hand_landmarks:
+        if not raw_hands:
             return []
 
         height, width = frame_shape[0], frame_shape[1]
         hands = []
-        for hand_landmarks in results.multi_hand_landmarks:
-            depth = self.estimate_depth(hand_landmarks.landmark, width, height)
-            world_points = [self.landmark_to_world(lm, T_ee, depth)
-                            for lm in hand_landmarks.landmark]
+        for raw_landmarks in raw_hands:
+            landmarks = [self._to_landmark(p) for p in raw_landmarks]
+            depth = self.estimate_depth(landmarks, width, height)
+            world_points = [self.landmark_to_world(lm, T_ee, depth) for lm in landmarks]
             center = tuple(sum(world_points[i][a] for i in self.PALM_QUAD) / len(self.PALM_QUAD)
                            for a in range(3))
-            palm_landmarks = [hand_landmarks.landmark[i] for i in self.PALM_QUAD]
+            palm_landmarks = [landmarks[i] for i in self.PALM_QUAD]
             screen_offset = (sum(p.x for p in palm_landmarks) / len(palm_landmarks) - 0.5,
                              sum(p.y for p in palm_landmarks) / len(palm_landmarks) - 0.5)
-            hand = Hand(hand_landmarks, depth, world_points, center, screen_offset)
-            hands.append(hand)
+            hands.append(Hand(landmarks, depth, world_points, center, screen_offset))
         return hands
+
+    @staticmethod
+    def _to_landmark(point) -> _Landmark:
+        """휴대폰이 보낸 랜드마크 하나(`[x, y, z]` 또는 `{"x","y","z"}`)를
+        `_Landmark`로 정규화한다."""
+        if isinstance(point, dict):
+            return _Landmark(float(point["x"]), float(point["y"]), float(point.get("z", 0.0)))
+        x, y, z = point[0], point[1], (point[2] if len(point) > 2 else 0.0)
+        return _Landmark(float(x), float(y), float(z))
 
     def estimate_depth(self, landmarks, frame_width, frame_height) -> float:
         """손이 카메라에서 얼마나 떨어져 있는지(m)를 '화면에 보이는 크기'로 추정한다.
@@ -197,22 +187,24 @@ class HandTracker:
     def draw_overlay(self, frame_bgr, hands):
         """카메라 프레임 위에 손 골격과 손바닥 사각형을 그린다(제자리 수정).
 
-        mediapipe 기본 랜드마크/연결선에 더해, PALM_QUAD 네 점을 이어 손바닥
-        영역을 초록 사각형으로 표시한다 — 손이 카메라를 향하는지 눈으로
-        확인하기 쉽게 하기 위한 보조선.
+        예전엔 mediapipe의 drawing_utils에 맡겼지만, 서버가 더 이상 mediapipe
+        객체(NormalizedLandmarkList)를 만들지 않으므로(손 랜드마크가 휴대폰에서
+        온 원시 좌표라서) HAND_CONNECTIONS 위상만으로 직접 선/점을 그린다.
+        PALM_QUAD 네 점을 이어 손바닥 영역도 초록 사각형으로 덧그린다 — 손이
+        카메라를 향하는지 눈으로 확인하기 쉽게 하기 위한 보조선.
         """
-        if not self.available:
-            return frame_bgr
         import cv2
 
+        h, w = frame_bgr.shape[0], frame_bgr.shape[1]
         for hand in hands:
-            self._drawing.draw_landmarks(
-                frame_bgr, hand.landmarks, self._mp.HAND_CONNECTIONS)
+            coords = [(int(lm.x * w), int(lm.y * h)) for lm in hand.landmarks]
+            for i, j in HAND_CONNECTIONS:
+                cv2.line(frame_bgr, coords[i], coords[j], (0, 200, 0), 2)
+            for x, y in coords:
+                cv2.circle(frame_bgr, (x, y), 3, (0, 0, 255), -1)
 
-            points = [hand.landmarks.landmark[i] for i in self.PALM_QUAD]
-            coords = [(int(p.x * frame_bgr.shape[1]), int(p.y * frame_bgr.shape[0]))
-                      for p in points]
-            for a, b in zip(coords, coords[1:] + coords[:1]):
+            palm_coords = [coords[i] for i in self.PALM_QUAD]
+            for a, b in zip(palm_coords, palm_coords[1:] + palm_coords[:1]):
                 cv2.line(frame_bgr, a, b, (0, 255, 0), 2)
         return frame_bgr
 
@@ -268,7 +260,7 @@ class HandFollower:
 
     # 상수 설명은 fundamental.const.HandFollowerConst 참고.
     FOLLOW_DISTANCE_M = HandFollowerConst.FOLLOW_DISTANCE_M
-    CENTER_OFFSET_THRESHOLD = HandFollowerConst.CENTER_OFFSET_THRESHOLD
+    CENTER_OFFSET_THRESHOLD = CameraGeometryConst.CENTER_OFFSET_THRESHOLD
     DEPTH_FOLLOW_GAIN = HandFollowerConst.DEPTH_FOLLOW_GAIN
 
     def __init__(self, follow_distance=FOLLOW_DISTANCE_M,

@@ -13,10 +13,13 @@ WEBM_EBML_HEADER = CameraConst.WEBM_EBML_HEADER
 class Camera:
     """Holds the latest JPEG frame streamed from /mobile over /ws/camera plus
     the routes that expose it. The same WebSocket also carries recorded
-    voice-question clips (WebM/Opus) from the mic button — the two are told
-    apart by content (JPEG's SOI marker vs WebM's EBML header) rather than a
-    custom framing header. Voice clips are handed off to `gemini` for
-    transcription and the transcript is sent back over that same connection."""
+    voice-question clips (WebM/Opus) from the mic button (binary, told apart
+    from JPEG by content — SOI marker vs WebM's EBML header) and hand-landmark
+    JSON messages (text) from the phone's own MediaPipe Tasks Vision
+    HandLandmarker (perception.hand_tracker no longer runs hand detection on
+    the server — see its module docstring for why). Voice clips are handed
+    off to `gemini` for transcription and the transcript is sent back over
+    that same connection."""
 
     def __init__(self, gemini):
         self.gemini = gemini
@@ -25,6 +28,10 @@ class Camera:
         self.frame_time = None
         self.frame_count = 0
         self.clients = 0
+        # Latest hand-landmark message from the phone: a list of hands, each
+        # 21 [x, y, z] points (mediapipe-normalized), or [] if the phone is
+        # currently seeing no hands. None until the first message arrives.
+        self.hand_landmarks = None
 
     def ws_camera(self, ws):
         """/ws/camera websocket handler."""
@@ -36,7 +43,9 @@ class Camera:
                 data = ws.receive()
                 if data is None:
                     break
-                if not isinstance(data, (bytes, bytearray)):
+
+                if isinstance(data, str):
+                    self._handle_text_message(data)
                     continue
                 data = bytes(data)
 
@@ -66,6 +75,25 @@ class Camera:
                 self.clients -= 1
             Logger.log("CAMERA", "Mobile client disconnected")
 
+    def _handle_text_message(self, text):
+        """Parse a text WebSocket message. Only "hand_landmarks" is defined
+        today (mobile.html's phone-side HandLandmarker results); anything
+        else (malformed JSON, unknown type) is logged and ignored rather than
+        killing the connection — a bad client message must never crash the
+        loop that also carries the JPEG stream and voice clips."""
+        try:
+            msg = json.loads(text)
+        except (ValueError, TypeError) as e:
+            Logger.log("CAMERA", f"Ignoring malformed text message: {e}")
+            return
+        if not isinstance(msg, dict) or msg.get("type") != "hand_landmarks":
+            return
+        landmarks = msg.get("landmarks")
+        if not isinstance(landmarks, list):
+            return
+        with self.lock:
+            self.hand_landmarks = landmarks
+
     def latest_frame(self):
         """GET /api/camera/latest.jpg"""
         with self.lock:
@@ -92,3 +120,14 @@ class Camera:
         server-local cv2 preview loop in webapp.app.run."""
         with self.lock:
             return self.frame, self.frame_count
+
+    def latest_hand_landmarks(self):
+        """Thread-safe read of the latest phone-reported hand landmarks for
+        run()'s preview loop. Returns None until the first message arrives;
+        after that, [] means "phone is looking but sees no hands right now"
+        (the phone sends every detection tick, empty or not — see
+        mobile.html — so there's no separate staleness timeout to track:
+        a stale value only happens if the phone stops sending entirely, in
+        which case the whole camera feed has already stalled too)."""
+        with self.lock:
+            return self.hand_landmarks

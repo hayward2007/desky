@@ -195,8 +195,12 @@ class HardwareActuatorConst:
     # 안전값.
     MIN_SPEED_PERCENT = 1
     # goto()/ArmController.goto_position()/goto_joints()가 speed를 명시적으로
-    #받지 않았을 때 쓰는 기본 이동 속도(%, 0~100).
-    DEFAULT_SPEED_PERCENT = 5
+    # 받지 않았을 때 쓰는 기본 이동 속도(%, 0~100). 5에서 낮춤 — 인식/렌더링이
+    # 밀렸다가 몰아서 명령이 들어올 때, 속도가 높으면 매번 목표까지 확
+    # 움직여서 산만하고 갑작스러워 보인다. 낮은 속도는 명령 간격이 고르지
+    # 않아도 움직임 자체를 완만하게 만든다(AppConst.COMMAND_MIN_INTERVAL_S로
+    # 명령 빈도 자체도 같은 이유로 제한한다).
+    DEFAULT_SPEED_PERCENT = 2
 
 
 # =============================================================================
@@ -287,7 +291,9 @@ class MujocoSimConst:
 # perception/camera_geometry.py
 # =============================================================================
 class CameraGeometryConst:
-    """perception.camera_geometry가 쓰는 상수."""
+    """perception.camera_geometry가 쓰는 상수 — FaceTracker/HandTracker,
+    FaceFollower/HandFollower가 물리적으로 같은 이유로 같은 값을 쓰는 상수도
+    (예전엔 양쪽에 따로 선언돼 있었다) 여기 하나로 모아 중복을 없앴다."""
 
     # IK 타겟의 좌우/앞뒤(x, y) 성분에 적용하는 한계(m). 이 팔은 베이스 회전축
     # (z축, x=y=0) 부근에서 1번 관절 회전 + 높이(z) 변화 위주로 움직이도록
@@ -297,16 +303,27 @@ class CameraGeometryConst:
     # clamp한다.
     IK_XY_LIMIT_M = 0.05
 
+    # 이미지 '가로'로 정규화한 핀홀 초점거리 — FaceTracker와 HandTracker가
+    # 둘 다 같은 물리 카메라(휴대폰 전면 카메라)를 가정하므로 같은 값이어야
+    # 한다(우연히 같은 게 아니다). 1.0 ~= 수평 화각 53도, 어림값 — 실제
+    # 캘리브레이션한 값은 아니므로 거리 추정은 측정이 아니라 추정치다.
+    FOCAL_NORM = 1.0
+
+    # 화면 중앙 데드존 반경(정규화 좌표, hypot(dx, dy) 기준) — FaceFollower/
+    # HandFollower 둘 다 "화면 중앙에서 이만큼 벗어나야 따라간다"는 같은
+    # 개념이라 같은 값을 쓴다. 이보다 가까우면 그대로 둔다.
+    CENTER_OFFSET_THRESHOLD = 0.15
+
 
 # =============================================================================
 # perception/face_tracker.py
 # =============================================================================
 class FaceTrackerConst:
-    """perception.face_tracker.FaceTracker가 쓰는 상수."""
+    """perception.face_tracker.FaceTracker가 쓰는 상수.
 
-    # 이미지 '가로'로 정규화한 핀홀 초점거리 — HandTrackerConst.FOCAL_NORM과
-    # 같은 의미(1.0 ~= 수평 화각 53도, 어림값).
-    FOCAL_NORM = 1.0
+    FOCAL_NORM은 여기 없다 — HandTrackerConst.FOCAL_NORM과 같은 값이라
+    CameraGeometryConst.FOCAL_NORM 하나로 통합했다(중복 상수 통일).
+    """
 
     # 양쪽 눈 바깥쪽 끝(landmark 33=오른쪽, 263=왼쪽) 사이 실제 거리 추정치.
     # 실측 캘리브레이션 값이 아니므로 거리 추정은 참고치 — HandTrackerConst의
@@ -319,11 +336,12 @@ class FaceTrackerConst:
 
 
 class FaceFollowerConst:
-    """perception.face_tracker.FaceFollower가 쓰는 상수."""
+    """perception.face_tracker.FaceFollower가 쓰는 상수.
 
-    # 화면 중앙 데드존 반경(정규화 좌표, hypot(dx, dy) 기준) — 이보다 가까우면
-    # 그대로 둔다.
-    CENTER_OFFSET_THRESHOLD = 0.15
+    CENTER_OFFSET_THRESHOLD는 여기 없다 — HandFollowerConst.CENTER_OFFSET_THRESHOLD와
+    같은 값이라 CameraGeometryConst.CENTER_OFFSET_THRESHOLD 하나로 통합했다.
+    """
+
     # 화면 좌우 오프셋(대략 -0.5~0.5)을 1번 관절 각도 보정량(rad)으로 바꾸는
     # 비례 이득 — 실측으로 튜닝 필요.
     YAW_GAIN = 0.8
@@ -342,13 +360,11 @@ class FaceFollowerConst:
 # perception/hand_tracker.py
 # =============================================================================
 class HandTrackerConst:
-    """perception.hand_tracker.HandTracker가 쓰는 상수."""
+    """perception.hand_tracker.HandTracker가 쓰는 상수.
 
-    # 이미지 '가로'로 정규화한 핀홀 초점거리. 즉 거리 d에 있는, 광축에 수직으로
-    # o만큼 떨어진 점은 화면 중심에서 o / (d / FOCAL_NORM) 만큼 떨어져 보인다.
-    # 1.0은 대략 수평 화각 53도로, 일반적인 휴대폰 카메라의 어림값이다. 실제
-    # 캘리브레이션을 한 값이 아니므로 거리 추정은 측정이 아니라 추정치다.
-    FOCAL_NORM = 1.0
+    FOCAL_NORM은 여기 없다 — FaceTrackerConst.FOCAL_NORM과 같은 값이라
+    CameraGeometryConst.FOCAL_NORM 하나로 통합했다(중복 상수 통일).
+    """
 
     # 손목(랜드마크 0) ~ 엄지 CMC(랜드마크 1) 실제 길이. 거리 역산의 기준자.
     WRIST_TO_THUMB_CMC_M = 0.035
@@ -358,12 +374,14 @@ class HandTrackerConst:
 
 
 class HandFollowerConst:
-    """perception.hand_tracker.HandFollower가 쓰는 상수."""
+    """perception.hand_tracker.HandFollower가 쓰는 상수.
+
+    CENTER_OFFSET_THRESHOLD는 여기 없다 — FaceFollowerConst.CENTER_OFFSET_THRESHOLD와
+    같은 값이라 CameraGeometryConst.CENTER_OFFSET_THRESHOLD 하나로 통합했다.
+    """
 
     # 앞뒤(깊이) 목표 거리(m) — 손이 이 거리에 있도록 일부만 보정한다.
     FOLLOW_DISTANCE_M = 0.45
-    # 화면 중앙 데드존 반경(정규화 좌표) — 이보다 가까우면 그대로 둔다.
-    CENTER_OFFSET_THRESHOLD = 0.15
     # 깊이(앞뒤) 오차를 한 번에 보정하는 비율. 1.0이면 즉시 FOLLOW_DISTANCE_M로
     # 스냅, 0에 가까울수록 거의 따라가지 않는다.
     DEPTH_FOLLOW_GAIN = 0.3
@@ -467,8 +485,28 @@ class AppConst:
     # 3D 오버레이(모바일 카메라 프레임마다 재계산)가 각자 실제 서보를 읽지
     # 않고 공유하는 캐시 유효 시간.
     Q_CACHE_TTL_S = 3.0
-    # run()의 미리보기 루프에서 mediapipe(손/얼굴 인식)에 넘기는 프레임 복사본의
+    # run()의 미리보기 루프에서 mediapipe(얼굴 인식)에 넘기는 프레임 복사본의
     # 최대 가로 폭(px) — mediapipe 비용은 픽셀 수에 비례하므로, 휴대폰이 그보다
     # 고해상도로 보내면 이 폭으로 다운스케일한 복사본에서만 인식을 돌린다
-    # (원본 프레임/치수는 오버레이 표시와 깊이 추정에 그대로 쓰인다).
+    # (원본 프레임/치수는 오버레이 표시와 깊이 추정에 그대로 쓰인다). 손 인식은
+    # 더 이상 여기서 안 돈다 — 휴대폰(mobile.html)이 자체적으로 MediaPipe
+    # Tasks Vision HandLandmarker를 돌려 랜드마크만 웹소켓으로 보낸다(서버는
+    # 얼굴 인식만 전담) — 안 그러면 폰이 실제로 보내는 ~20fps를 서버가
+    # 얼굴+손 인식을 모두 mediapipe로 처리하며 따라가지 못했다.
     MEDIAPIPE_MAX_WIDTH = 480
+
+    # run()이 실제로 하드웨어에 명령(goto_position/goto_joints)을 내리는 최소
+    # 간격(초). 결정 루프(인식 → 추종 명령)는 프레임이 들어올 때마다(최대
+    # ~20fps) 매번 돌지만, 목표가 프레임마다 조금씩 바뀔 때 그때그때 전부
+    # 재명령하면 로봇이 계속 새로 움직이기 시작해서 산만해 보인다 — 이
+    # 간격보다 자주는 실제 서보 명령을 보내지 않는다(HardwareActuatorConst.
+    # DEFAULT_SPEED_PERCENT를 낮춘 것과 같은 목적).
+    COMMAND_MIN_INTERVAL_S = 0.15
+
+    # 로컬 미리보기 창(cv2 카메라 창 + matplotlib 3D 씬)을 다시 그리는 최소
+    # 간격(초). matplotlib 3D 렌더링(ax.cla() + Poly3DCollection 재구성 +
+    # 범례/라벨 텍스트 + canvas.draw())은 얼굴 인식보다 훨씬 비싸다 — 결정
+    # 루프와 같은 빈도로 매 프레임 다시 그리면 그 렌더링 자체가 병목이 되어
+    # 폰이 보내는 ~20fps를 못 따라간다. 이 창은 로봇 동작에 영향을 주지
+    # 않는 디버그용 미리보기이므로 훨씬 느리게 갱신해도 무방하다.
+    VIS_MIN_INTERVAL_S = 0.1

@@ -598,6 +598,10 @@
     ctx.scale(-1, 1);
     ctx.drawImage(video, -vw / 2, -vh / 2, vw, vh);
     ctx.restore();
+    // 손 인식은 이 방향 보정이 끝난 캔버스에 대고 돈다(아래 9번 섹션) — 서버가
+    // 받는 프레임과 정확히 같은 좌표계(이미 정방향으로 회전/미러링됨)여야
+    // 랜드마크 좌표가 서버 쪽 계산과 어긋나지 않는다.
+    if (window.__sendHandLandmarks) window.__sendHandLandmarks(canvas, ws);
     canvas.toBlob((blob) => {
       if (blob && ws && ws.readyState === WebSocket.OPEN) {
         ws.send(blob);
@@ -1165,6 +1169,83 @@
   setCamMode("live");
   setCameraState(false, "카메라를 켜는 중입니다");
   window.addEventListener("load", start);
+</script>
+
+<script type="module">
+  /* =====================================================================
+     9. 손 인식 — 휴대폰에서 직접 MediaPipe Tasks Vision(HandLandmarker)을
+        돌려서 21개 랜드마크만(이미지 자체가 아니라 좌표만) 웹소켓으로 보낸다.
+
+        원래는 서버(컴퓨터)가 얼굴 인식과 손 인식을 둘 다 mediapipe(Python)로
+        처리했는데, 컴퓨터 하나가 두 모델 추론 + matplotlib 3D 렌더링 +
+        하드웨어 제어까지 매 프레임 다 하려니 폰이 실제로 보내는 프레임레이트
+        (~20fps, 위 FRAME_INTERVAL_MS)를 못 따라가서 로봇 반응이 느려지고
+        뚝뚝 끊겼다. 그래서 손 인식은 폰이 직접(로컬) 하고, 서버는 얼굴 인식
+        (mediapipe FaceMesh)만 전담한다 — perception/hand_tracker.py,
+        src/api/camera.py 참고.
+
+        위 1번 섹션의 captureLoop()이 방향 보정(회전 + 좌우 미러링)까지 끝낸
+        캡처 캔버스(#capture)에 대고 돌린다 — 서버가 받는 좌표계와 똑같은
+        기준이어야 랜드마크 좌표가 서버 쪽 깊이 추정/월드 변환과 어긋나지
+        않는다. 이 스크립트가 로드/초기화에 실패해도(오프라인, 구형 브라우저,
+        CDN 접근 불가 등) 조용히 비활성으로 남는다 — 손 인식 없이 얼굴 인식/
+        idle 두리번거림만으로 계속 동작한다(perception 패키지의 "부분 실패"
+        관례와 같은 정신).
+     ===================================================================== */
+  import {
+    HandLandmarker,
+    FilesetResolver,
+  } from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.21";
+
+  const TASKS_VISION_WASM_URL =
+    "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.21/wasm";
+  const HAND_MODEL_URL =
+    "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/latest/hand_landmarker.task";
+
+  let handLandmarker = null;
+  let handLandmarkerReady = false;
+
+  async function createHandLandmarker(vision, delegate) {
+    return HandLandmarker.createFromOptions(vision, {
+      baseOptions: { modelAssetPath: HAND_MODEL_URL, delegate },
+      numHands: 2,
+      runningMode: "VIDEO",
+    });
+  }
+
+  (async () => {
+    try {
+      const vision = await FilesetResolver.forVisionTasks(TASKS_VISION_WASM_URL);
+      try {
+        handLandmarker = await createHandLandmarker(vision, "GPU");
+      } catch (e) {
+        // 일부 브라우저/기기는 GPU delegate를 못 쓴다 — CPU로 재시도.
+        handLandmarker = await createHandLandmarker(vision, "CPU");
+      }
+      handLandmarkerReady = true;
+    } catch (e) {
+      console.warn("HandLandmarker unavailable, hand tracking disabled:", e);
+    }
+  })();
+
+  /** captureLoop()(1번 섹션, classic script)이 매 프레임 캡처 캔버스를 새로
+   * 그린 직후 호출한다. 손이 하나도 안 보여도(길이 0 배열) 그대로 보낸다 —
+   * 서버가 "지금은 손이 없다"를 곧바로 알아야 사라진 손 위치를 계속
+   * 붙잡고 있지 않는다(src/api/camera.py의 Camera.latest_hand_landmarks 참고). */
+  window.__sendHandLandmarks = function (canvasEl, wsConn) {
+    if (!handLandmarkerReady || !wsConn || wsConn.readyState !== WebSocket.OPEN) return;
+    let result;
+    try {
+      result = handLandmarker.detectForVideo(canvasEl, performance.now());
+    } catch (e) {
+      return;
+    }
+    const landmarks = (result && result.landmarks) || [];
+    wsConn.send(JSON.stringify({
+      type: "hand_landmarks",
+      landmarks: landmarks.map((hand) => hand.map((p) => [p.x, p.y, p.z])),
+    }));
+  };
 </script>
 </body>
 </html>
