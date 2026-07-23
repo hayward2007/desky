@@ -200,7 +200,7 @@ class HardwareActuatorConst:
     # 움직여서 산만하고 갑작스러워 보인다. 낮은 속도는 명령 간격이 고르지
     # 않아도 움직임 자체를 완만하게 만든다(AppConst.COMMAND_MIN_INTERVAL_S로
     # 명령 빈도 자체도 같은 이유로 제한한다).
-    DEFAULT_SPEED_PERCENT = 2
+    DEFAULT_SPEED_PERCENT = 10
 
 
 # =============================================================================
