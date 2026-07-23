@@ -12,7 +12,7 @@ class Controller :
         Logger.log("CONTROLLER", "Initializing...")
         load_dotenv()
         
-        self._device_name = device_name if device_name else '/dev/' + os.getenv("DEVICE_NAME")
+        self._device_name = device_name if device_name else os.getenv("DEVICE_NAME")
         self._baudrate = baudrate if baudrate else int(os.getenv("BAUDRATE"))
         self._protocol_version = protocol_version if protocol_version else float(os.getenv("PROTOCOL_VERSION"))
         
