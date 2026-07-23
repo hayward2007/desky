@@ -188,6 +188,20 @@ python main.py   # 저장소 루트에서 실행, https://localhost:8000
    `canvas.toBlob('image/jpeg')`로 JPEG를 만들어 `wss://<host>/ws/camera`로 바이너리 그대로
    전송한다. 프레임마다 완결된 JPEG라서 서버는 컨테이너/코덱을 신경 쓸 필요가 없다.
 
+**방향 보정 (마운트 vs 손에 든 상태):** 이 휴대폰은 손으로 드는 게 아니라 팔의
+end-effector에 고정 장착돼 있어서, 브라우저가 "지금 든 방향 기준으로 똑바로" 자동
+보정하는 영상이 실제로 앉아서 보는 방향과 어긋날 수 있다. `mobile.html`은 매 프레임마다
+Screen Orientation API(`screen.orientation.angle`, 구형 브라우저는 `window.orientation`
+폴백)로 지금 회전 각도를 읽어 그만큼 반대로 돌린 뒤 — `<video>` 미리보기(CSS
+`transform: rotate()`)와 웹소켓으로 보내는 프레임(캔버스에 그릴 때 `ctx.rotate()`) 양쪽에
+동일하게 적용한다. `angle=0`(세로, 화면 안 돌아간 상태)일 때 90도를 돌리는 게 기준점 —
+과거엔 서버(`src/app.py`)에서 이 90도를 하드코딩해 mediapipe 처리 직전에 돌렸지만, 마운트
+각도가 바뀌면 다시 깨지는 문제가 있어 폰이 보고하는 실제 화면 방향 기준으로 클라이언트에서
+보정하도록 바꿨다. 웹소켓으로 오는 프레임은 이제 항상 보정된(정방향) 상태이므로
+`src/app.py`/`perception/hand_tracker.py`는 더 이상 프레임을 따로 회전하지 않는다. 마운트
+기준 자체를 바꾸려면(예: 항상 90도가 아니라 180도가 기준이 되도록) `mobile.html`의
+`correctionAngle()` 안 `90` 상수만 조정하면 된다.
+
 서버(`src/api/camera.py`의 `Camera`)는 `flask_sock.Sock`으로 `/ws/camera`를 raw WebSocket으로
 처리한다:
 

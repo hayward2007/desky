@@ -241,6 +241,14 @@
     }
     #scan-canvas { object-fit: contain; background: var(--ink); cursor: pointer; }
 
+    /* 화면 방향 보정 — #preview는 JS가 회전각에 맞춰 width/height/transform을
+       직접 계산해 주므로, .stage > * 의 inset:0 대신 중심 기준 배치로 뺀다. */
+    #preview {
+      inset: auto;
+      top: 50%; left: 50%;
+      transform: translate(-50%, -50%);
+    }
+
     /* 카메라 꺼짐 / 권한 필요할 때 덮는 면 */
     .veil {
       position: absolute; inset: 0;
@@ -483,6 +491,7 @@
   const JPEG_QUALITY = 0.6;
 
   const video     = document.getElementById("preview");
+  const stageEl   = document.querySelector(".stage");
   const canvas    = document.getElementById("capture");
   const statusEl  = document.getElementById("status");
   const startBtn  = document.getElementById("start-btn");
@@ -511,6 +520,46 @@
     startBtn.hidden = on;
   }
 
+  // ── 화면 방향 보정 ──────────────────────────────────────
+  // 이 휴대폰은 손에 들고 쓰는 게 아니라 팔의 end-effector에 고정 장착돼
+  // 있다. 브라우저는 항상 "지금 든 방향에서 똑바로" 보이도록 영상을 자체
+  // 보정하는데, 마운트된 각도가 사람이 자연스럽게 드는 각도와 다르면 그
+  // 보정 기준이 실제로 앉아서 보는 방향과 어긋난다. 예전에는 서버에서
+  // 90도 고정 회전으로 땜빵했지만(마운트를 바꾸면 다시 깨짐), 대신 브라우저
+  // Screen Orientation API로 지금 회전 각도를 읽어 그만큼 반대로 돌려서
+  // 항상 같은 최종 방향이 나오게 한다 — 미리보기(<video>)와 웹소켓으로
+  // 보내는 프레임 둘 다 동일하게 적용해서 화면에 보이는 것과 서버가 받는
+  // 것이 같은 방향이 되도록 맞춘다.
+  //
+  // angle=0(세로, 회전 없음)일 때 90도를 돌려주는 게 기존 하드코딩 회전과
+  // 같은 기준점이다 — 마운트를 바꿔서 기준이 달라지면 이 90 상수만 조정.
+  let currentRotation = 0;
+
+  function correctionAngle() {
+    let angle = 0;
+    if (screen.orientation && typeof screen.orientation.angle === "number") {
+      angle = screen.orientation.angle;
+    } else if (typeof window.orientation === "number") {
+      angle = (window.orientation + 360) % 360;
+    }
+    return ((90 - angle) % 360 + 360) % 360;
+  }
+
+  /** 회전각에 맞춰 #preview의 표시 크기를 .stage 박스 기준으로 다시 잡는다. */
+  function layoutPreview() {
+    currentRotation = correctionAngle();
+    const swap = currentRotation === 90 || currentRotation === 270;
+    const stageWidth = stageEl.clientWidth, stageHeight = stageEl.clientHeight;
+    video.style.width  = (swap ? stageHeight : stageWidth) + "px";
+    video.style.height = (swap ? stageWidth : stageHeight) + "px";
+    video.style.transform = `translate(-50%, -50%) rotate(${currentRotation}deg)`;
+  }
+
+  video.addEventListener("loadedmetadata", layoutPreview);
+  window.addEventListener("resize", layoutPreview);
+  window.addEventListener("orientationchange", layoutPreview);
+  if (screen.orientation) screen.orientation.addEventListener("change", layoutPreview);
+
   /** 서버로 프레임과 음성을 보내는 WebSocket을 연다. */
   function connectSocket() {
     const proto = location.protocol === "https:" ? "wss:" : "ws:";
@@ -532,14 +581,22 @@
     };
   }
 
-  /** 비디오 한 프레임을 JPEG로 만들어 소켓으로 보낸다. */
+  /** 비디오 한 프레임을 화면 방향 보정에 맞춰 회전시켜 JPEG로 만들고 소켓으로 보낸다. */
   function captureLoop() {
     if (!video.videoWidth) return;
-    if (canvas.width !== video.videoWidth) {
-      canvas.width  = video.videoWidth;
-      canvas.height = video.videoHeight;
+    const vw = video.videoWidth, vh = video.videoHeight;
+    const swap = currentRotation === 90 || currentRotation === 270;
+    const outW = swap ? vh : vw, outH = swap ? vw : vh;
+    if (canvas.width !== outW || canvas.height !== outH) {
+      canvas.width = outW;
+      canvas.height = outH;
     }
-    canvas.getContext("2d").drawImage(video, 0, 0, canvas.width, canvas.height);
+    const ctx = canvas.getContext("2d");
+    ctx.save();
+    ctx.translate(outW / 2, outH / 2);
+    ctx.rotate(currentRotation * Math.PI / 180);
+    ctx.drawImage(video, -vw / 2, -vh / 2, vw, vh);
+    ctx.restore();
     canvas.toBlob((blob) => {
       if (blob && ws && ws.readyState === WebSocket.OPEN) {
         ws.send(blob);

@@ -413,8 +413,10 @@ def run():
             # needlessly re-decode and re-display the same bytes every spin.
             if frame_bytes is not None and frame_count != last_frame_count:
                 last_frame_count = frame_count
+                # /mobile now corrects orientation itself (screen.orientation
+                # angle) before sending, so the frame arrives already upright —
+                # no server-side rotate needed here anymore.
                 frame = cv2.imdecode(np.frombuffer(frame_bytes, np.uint8), cv2.IMREAD_COLOR)
-                frame = cv2.rotate(frame, cv2.ROTATE_90_CLOCKWISE)
 
                 q = _current_q() or [0.0] * len(arm.joints)
                 T_ee = arm.fk_matrix(q)

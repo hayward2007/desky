@@ -258,7 +258,7 @@
     <origin xyz="0 0 0.067" rpy="0 0 0"/>
     <axis xyz="0 0 1"/>                          <!-- yaw : shaft along world Z -->
     <limit lower="-2.05949" upper="3.10669" effort="1.5" velocity="6.0"/>
-    <dynamixel id="1" model="AX-18A" home_deg="180" direction="-1"/>
+    <dynamixel id="1" model="AX-18A" home_deg="180" direction="1"/>
   </joint>
 
   <joint name="guard_joint" type="fixed">
@@ -305,7 +305,7 @@
     <origin xyz="-0.048 0.019 0.0145" rpy="1.5708 0 0"/>
     <axis xyz="0 0 1"/>                          <!-- pitch (shoulder) : shaft along world X -->
     <limit lower="-1.14319" upper="1.57952" effort="1.5" velocity="6.0"/>
-    <dynamixel id="3" model="AX-18A" home_deg="180" direction="1"/>
+    <dynamixel id="3" model="AX-18A" home_deg="180" direction="-1"/>
   </joint>
 
   <joint name="link1_joint" type="fixed">
@@ -320,7 +320,7 @@
     <origin xyz="0 -0.03275 0.2665" rpy="1.5708 0 1.5708"/>
     <axis xyz="0 0 1"/>                          <!-- pitch (elbow) : shaft along world X -->
     <limit lower="-2.19039" upper="2.05949" effort="1.5" velocity="6.0"/>
-    <dynamixel id="4" model="AX-18A" home_deg="180" direction="1"/>
+    <dynamixel id="4" model="AX-18A" home_deg="180" direction="-1"/>
   </joint>
 
   <joint name="link2_joint" type="fixed">
@@ -335,7 +335,7 @@
     <origin xyz="0 -0.03275 0.2665" rpy="1.5708 0 1.5708"/>
     <axis xyz="0 0 1"/>                          <!-- pitch (wrist) : shaft along world X -->
     <limit lower="-1.57080" upper="1.57080" effort="1.5" velocity="6.0"/>
-    <dynamixel id="5" model="AX-18A" home_deg="180" direction="1"/>
+    <dynamixel id="5" model="AX-18A" home_deg="180" direction="-1"/>
   </joint>
 
   <joint name="end_effector_joint" type="fixed">
