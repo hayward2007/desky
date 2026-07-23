@@ -193,17 +193,45 @@ class ArmService:
         if self.arm_ctrl is None:
             raise HardwareUnavailable(self.hardware_error or "no hardware connected")
 
+    def _remember_commanded_q(self, q):
+        """방금 명령한 자세를 관절각 캐시에 즉시 반영한다.
+
+        [진동 원인 수정] 추종 루프(PerceptionLoop.drive_arm)는 COMMAND_MIN_INTERVAL_S
+        (0.15초)마다 "현재 yaw/높이 + 이번 오프셋만큼"처럼 **상대적으로** 다음
+        목표를 계산하는데, 그 "현재"를 여태 `current_q()`(하드웨어 읽기 캐시,
+        Q_CACHE_TTL_S=3초)에서 가져왔다. 즉 최대 3초 동안, 그 사이 이미 실행된
+        수십 번의 명령으로 팔이 실제로 얼마나 움직였는지 모른 채 매번 같은(3초
+        전) 기준 각도에 새 보정치를 얹어 명령했다 — 그 기준 각도가 실제와
+        어긋난 채로 계속 쌓이면서 팔이 점점 크게 흔들리는("폭주") 원인이었다.
+
+        고칠 방법은 하드웨어를 더 자주 읽는 게 아니라(그러면 원래 이 캐시를
+        만든 이유인 시리얼 부하 문제가 되돌아온다), 애초에 우리가 방금 무엇을
+        명령했는지는 이미 알고 있으므로 그 값을 캐시에 바로 채워 넣는 것이다 —
+        다음 `current_q()` 호출이 하드웨어를 다시 읽지 않고도 "방금 명령한
+        자세"를 즉시 돌려주게 된다. 서보가 그 자세에 물리적으로 아직 도달하지
+        못했더라도, 상대 보정을 쌓아 가는 추종 루프 입장에서는 "우리가
+        의도한 목표"를 기준으로 삼는 편이 실제로 더 맞다(그래야 다음 보정이
+        그 위에 정확히 얹힌다).
+        """
+        self._q_cache["q"] = list(q)
+        self._q_cache["t"] = time.monotonic()
+
     def goto_position(self, target):
         """IK로 (x, y, z)까지 이동. (q, converged)를 돌려준다."""
         self._require_hardware()
         Logger.log("ARM", f"goto_position: target={tuple(target)}")
-        return self.arm_ctrl.goto_position(target)
+        q, converged = self.arm_ctrl.goto_position(target)
+        if converged:
+            self._remember_commanded_q(q)
+        return q, converged
 
     def goto_joints(self, servo_degs):
         """모든 관절을 주어진 서보각으로 보내고 결과 위치(FK)를 돌려준다."""
         self._require_hardware()
         Logger.log("ARM", f"goto_joints: degrees={servo_degs}")
-        return self.arm_ctrl.goto_joints(servo_degs)
+        pos = self.arm_ctrl.goto_joints(servo_degs)
+        self._remember_commanded_q(self.arm.servo_deg_to_q(servo_degs))
+        return pos
 
     def goto_joint(self, joint_id, degree):
         """관절 하나만 움직인다. 해당 id의 액추에이터가 없으면 KeyError."""
@@ -213,6 +241,9 @@ class ArmService:
             raise KeyError(joint_id)
         Logger.log("ARM", f"goto_joint: id={joint_id} degree={degree}")
         actuator.goto(degree)
+        servo_degs = self.arm.q_to_servo_deg(self.current_q_or_home())
+        servo_degs[self.arm.id_to_index[joint_id]] = degree
+        self._remember_commanded_q(self.arm.servo_deg_to_q(servo_degs))
 
     def execute(self, command):
         """`FollowController.next_command()`가 돌려준 (kind, payload)를 실행한다.

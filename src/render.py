@@ -88,24 +88,26 @@ class ScenePreview:
         self.ax = self.fig.add_subplot(111, projection="3d", computed_zorder=False)
         self.ax.view_init(elev=renderer.elev, azim=renderer.azim)
 
-    def draw(self, q, T_ee, hands, faces, hand_tracker, face_tracker):
-        """팔 + 손 + 얼굴을 한 장으로 그려 BGR 이미지(numpy)로 돌려준다.
+    def draw(self, q, T_ee, hands, faces, bodies, hand_tracker, face_tracker, body_tracker):
+        """팔 + 손 + 얼굴 + 몸을 한 장으로 그려 BGR 이미지(numpy)로 돌려준다.
 
-        q            : 현재 관절각(rad)
-        T_ee         : end-effector 4x4 월드 변환(카메라 위치/방향)
-        hands, faces : 이번 프레임의 인식 결과
-        hand_tracker, face_tracker: 각자의 3D 그리기 메서드를 가진 트래커
+        q                   : 현재 관절각(rad)
+        T_ee                : end-effector 4x4 월드 변환(카메라 위치/방향)
+        hands, faces, bodies: 이번 프레임의 인식 결과
+        hand_tracker, face_tracker, body_tracker: 각자의 3D 그리기 메서드를
+                              가진 트래커
 
         그리는 주체를 트래커에게 맡기는 이유: "손 골격을 어떻게 잇는지",
-        "얼굴 중심을 어떤 색 점으로 찍는지"는 그 트래커가 만든 자료구조를 가장
-        잘 아는 쪽이 정해야 한다. 이 클래스는 순서와 캔버스만 관리한다.
+        "얼굴/몸 중심을 어떤 색 점으로 찍는지"는 그 트래커가 만든 자료구조를
+        가장 잘 아는 쪽이 정해야 한다. 이 클래스는 순서와 캔버스만 관리한다.
         """
         self.renderer.draw_into(self.ax, q)
         # 카메라가 본다고 가정하는 방향(청록 화살표) — 이 가정이 실제와
-        # 어긋나면 손/얼굴이 엉뚱한 위치에 찍히므로 눈으로 확인할 수 있게 둔다.
+        # 어긋나면 손/얼굴/몸이 엉뚱한 위치에 찍히므로 눈으로 확인할 수 있게 둔다.
         hand_tracker.draw_forward_axis_debug(self.ax, T_ee, self.renderer.arrow_length())
         hand_tracker.draw_hands_3d(self.ax, hands)
         face_tracker.draw_faces_3d(self.ax, faces)
+        body_tracker.draw_bodies_3d(self.ax, bodies)
         self.canvas.draw()
         return self._to_bgr()
 

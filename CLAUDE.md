@@ -2,9 +2,12 @@
 
 책상 위 5자유도 로봇팔로, end-effector에 **휴대폰을 장착**하는 프로젝트. DYNAMIXEL
 AX-18A 서보 5개를 시리얼로 제어하며, URDF 기반 순기구학(FK)/역기구학(IK)을 제공한다.
-휴대폰 카메라를 통해 얼굴/손 인식과 문서 스캔/음성 대화(Gemini)도 지원한다 — 얼굴 인식은
-서버(mediapipe FaceMesh), 손 인식은 휴대폰 자체(브라우저 MediaPipe Tasks Vision)가 각각
-전담한다(왜 나눴는지는 아래 "손 인식" 절 참고).
+휴대폰 카메라를 통해 얼굴/손 인식과 문서 스캔/음성 대화(Gemini)도 지원한다 — 얼굴/손 인식
+둘 다 휴대폰 자체(브라우저 MediaPipe Tasks Vision)가 전담하고, 서버는 좌표 변환/추종
+계산만 한다. 단 얼굴 인식이 실패하면(옆모습 등) 사람 몸(어깨)을 폴백으로 서버가 직접
+mediapipe로 인식해 추적한다(왜 그런지는 아래 "얼굴/몸/손 인식" 절 참고). 손 인식/가위바위보
+제스처는 켜져 있지만, **팔이 손 위치로 움직이는 것(추종)만** 기본적으로 꺼져 있다
+(`fundamental.const.FollowControllerConst.HAND_FOLLOW_ENABLED`).
 
 **이 저장소는 두 브랜치를 합친 통합본이다** — 팔 추적 계열(`desky-develop`: 얼굴/손 추적,
 추종 컨트롤러, 두리번거리기)과 웹 기능 계열(`desky-new_mobile_1017ver`: 일정, 조명,
@@ -40,9 +43,9 @@ GEMINI_API_KEY=...       # 채팅/요약/STT/문서 읽기용 (없으면 해당 
 `python-dotenv`(하드웨어 제어), `matplotlib`(`kinematics/simulate.py` 3D 프리뷰),
 `flask`/`flask-sock`/`pyopenssl`(`src/app.py` 제어 대시보드 + 모바일 카메라 스트리밍),
 `google-genai`(`/api/ask`, 문서 읽기), `opencv-python`/`numpy`(문서 검출, 카메라 미리보기
-창), `mediapipe`(`perception/face_tracker.py` 얼굴 인식 — 손 인식은 더 이상 서버 의존성이
-아니다, 휴대폰 브라우저가 자체적으로 한다). 기구학 모듈 자체는 **표준
-라이브러리만** 사용(numpy 불필요).
+창), `mediapipe`(`perception/body_tracker.py` 몸 인식 — 얼굴 인식이 실패했을 때의 서버
+폴백. 얼굴/손 인식 자체는 서버 의존성이 아니다, 휴대폰 브라우저가 자체적으로 한다). 기구학
+모듈 자체는 **표준 라이브러리만** 사용(numpy 불필요).
 
 Homebrew Python은 PEP 668로 시스템 전역 `pip install`을 막으므로, 이 선택적 의존성 설치는
 프로젝트 venv를 권장:
@@ -82,9 +85,10 @@ desky/
 │   └── meshes/*.stl        # Fusion 360에서 내보낸 실제 부품 메시
 ├── perception/          # AI 인지 기능 (하드웨어 불필요, 카메라 프레임/랜드마크 입력)
 │   ├── camera_geometry.py  # FaceTracker/HandTracker가 공유하는 핀홀 카메라 지오메트리 + clamp_xy
-│   ├── face_tracker.py     # FaceTracker(mediapipe FaceMesh, 서버 실행) + FaceFollower
+│   ├── face_tracker.py     # FaceTracker(좌표 변환만, 인식은 휴대폰이 함) + FaceFollower
+│   ├── body_tracker.py     # BodyTracker(서버 mediapipe Pose, 얼굴 폴백) + BodyFollower
 │   ├── hand_tracker.py     # HandTracker(좌표 변환만, 인식은 휴대폰이 함) + HandFollower
-│   ├── follow_controller.py # FollowController — 얼굴>손>idle 우선순위 + 두리번 상태 머신
+│   ├── follow_controller.py # FollowController — 얼굴>몸>손>idle 우선순위 + 두리번 상태 머신
 │   ├── gesture.py          # 가위/바위/보 판정 + 엣지 트리거 디스패처 (병합: 웹 계열)
 │   └── document_scanner.py # DocumentScanner — 문서 사각형 검출/원근 보정 (OCR 없음)
 ├── src/                 # Flask 대시보드 + 모바일 카메라/음성/문서/일정/조명 (하드웨어 없어도 실행됨)
@@ -125,9 +129,10 @@ desky/
 | [kinematics/find_joint_limits.py](kinematics/find_joint_limits.py) | MuJoCo로 자기충돌이 시작되는 지점까지 관절 한계를 스윕해 `configure/joints.json`을 만드는 스크립트 |
 | [kinematics/configure/desky.urdf](kinematics/configure/desky.urdf) | **로봇 구성의 단일 소스 오브 트루스** (URDF, XML) |
 | [perception/camera_geometry.py](perception/camera_geometry.py) | `camera_frame()`(핀홀 카메라 로컬 축) + `clamp_xy()` — FaceTracker/HandTracker, FaceFollower/HandFollower가 공유하는 지오메트리 |
-| [perception/face_tracker.py](perception/face_tracker.py) | `FaceTracker` — mediapipe FaceMesh로 얼굴을 인식(서버에서 실행)해 3D 월드 좌표로 올린다 + `FaceFollower`(yaw 회전 + 높이 이동으로 화면 중앙 추종) |
+| [perception/face_tracker.py](perception/face_tracker.py) | `FaceTracker` — **인식은 안 함**, 휴대폰이 보낸 얼굴 랜드마크(코끝 + 양쪽 눈 바깥쪽 끝)를 3D 월드 좌표로 변환/시각화만 + `FaceFollower`(yaw 회전 + 높이 이동으로 화면 중앙 추종) |
+| [perception/body_tracker.py](perception/body_tracker.py) | `BodyTracker` — **서버에서 직접 mediapipe Pose로 인식**(얼굴 인식 실패 시 폴백, 얼굴이 보이면 호출 안 됨) + `BodyFollower`(FaceFollower와 동일한 yaw+높이 추종) |
 | [perception/hand_tracker.py](perception/hand_tracker.py) | `HandTracker` — **인식은 하지 않는다**, 휴대폰이 보낸 손 랜드마크(좌표만)를 end-effector의 FK 변환행렬을 이용해 3D 월드 좌표로 올리고 시각화만 한다 + `HandFollower` |
-| [perception/follow_controller.py](perception/follow_controller.py) | `FollowController` — 얼굴>손>idle 우선순위로 다음 명령을 정하고, 아무것도 안 보이면 idle 복귀 후 1번 관절을 두리번거리는 상태 머신 |
+| [perception/follow_controller.py](perception/follow_controller.py) | `FollowController` — 얼굴>몸>손>idle 우선순위로 다음 명령을 정하고, 아무것도 안 보이면 idle 복귀 후 1번 관절을 두리번거리는 상태 머신 |
 | [perception/document_scanner.py](perception/document_scanner.py) | `DocumentScanner` — 카메라 프레임에서 종이 문서 사각형을 검출하고 원근 보정(warp)해서 잘라낸다. OCR은 하지 않음(그 결과를 `Gemini.parse_document()`에 넘김) |
 | [perception/gesture.py](perception/gesture.py) | 손 랜드마크 → 가위/바위/보 분류 + `GestureRecognizer`(N프레임 유지 확정, 엣지 트리거, 쿨다운). `_landmarks_of()`가 `Hand`/mediapipe 객체/리스트를 모두 받아내므로 인식 주체가 바뀌어도 그대로 동작 |
 | [src/app.py](src/app.py) | `DeskyApp` — **조립만** 한다(서비스 생성 + 라우트 등록 + 실행). 페이지 `/`, `/mobile`. 병합 전 500줄 전역 스크립트였던 것을 아래 객체들로 쪼갰다 |
@@ -168,9 +173,10 @@ main.py
        ├─ src.api.light.Light ──HTTP──▶ raspberry-server              (웹 계열)
        ├─ src.gesture_bridge.GestureBridge ── perception.gesture + Camera + Light
        └─ src.perception_loop.PerceptionLoop      # 메인 스레드(cv2 창 제약), 라우트 아님
-            ├─ perception.face_tracker.{FaceTracker,FaceFollower}   ← 서버 mediapipe
+            ├─ perception.face_tracker.{FaceTracker,FaceFollower}   ← 폰이 보낸 랜드마크 좌표 변환만
+            ├─ perception.body_tracker.{BodyTracker,BodyFollower}   ← 서버 mediapipe Pose (얼굴 폴백)
             ├─ perception.hand_tracker.{HandTracker,HandFollower}   ← 폰이 보낸 랜드마크 좌표 변환만
-            ├─ perception.follow_controller.FollowController        (얼굴 > 손 > idle)
+            ├─ perception.follow_controller.FollowController        (얼굴 > 몸 > 손 > idle)
             └─ src.render.ScenePreview
 ```
 
@@ -180,8 +186,9 @@ main.py
 `app.py`는 건드릴 필요가 없다.
 
 **폰이 보낸 손 랜드마크 하나를 두 소비자가 나눠 쓴다**(추종 + 제스처). 서버에서
-mediapipe hands를 다시 돌리지 말 것 — 그러면 손 목록이 두 개가 되고 프레임레이트가
-무너진다(docs/MERGE.md §2.1).
+mediapipe(Python) Hands나 FaceMesh를 다시 돌리지 말 것 — 얼굴/손 인식 둘 다 이제 휴대폰이
+전담하고(mediapipe Tasks Vision, JS), 서버에서 같은 걸 다시 돌리면 결과가 두 갈래로
+갈리고 프레임레이트도 다시 무너진다(docs/MERGE.md §2.1).
 `main.py`는 `src.app`을 임포트해 실행하는 얇은 launcher다 — 실제 하드웨어/Gemini 초기화는
 `src/app.py` 쪽에서 일어난다(하드웨어나 Gemini가 없으면 실패를 잡아 "미연결/미구성" 상태로
 대체 — 아래 절 참고).
@@ -287,41 +294,112 @@ Screen Orientation API(`screen.orientation.angle`, 구형 브라우저는 `windo
 즉석에서 만들어 쓰므로 브라우저가 "안전하지 않음" 경고를 한 번 띄운다 — 데스크톱 대시보드,
 모바일 페이지 둘 다에서 "고급 → 계속 진행"으로 넘어가야 한다.
 
-### 얼굴/손 인식 (`perception/face_tracker.py`, `perception/hand_tracker.py`, `src.app.run()`)
+### 얼굴/몸/손 인식 (`perception/face_tracker.py`, `perception/body_tracker.py`, `perception/hand_tracker.py`, `src/perception_loop.py`)
 
-**얼굴 인식은 서버, 손 인식은 휴대폰** — 원래는 둘 다 서버(`src.app.run()`)가 mediapipe로
-처리했지만, 컴퓨터 하나가 얼굴+손 인식 추론 + matplotlib 3D 미리보기 렌더링 + 하드웨어
-제어를 매 프레임 다 하려니 휴대폰이 실제로 보내는 프레임레이트(`FRAME_INTERVAL_MS` ≈ 20fps)를
-못 따라가서 로봇 반응이 느려지고 뚝뚝 끊겼다. 그래서:
+**얼굴/손 인식 둘 다 휴대폰이 한다** — 원래는 서버(`PerceptionLoop`)가 mediapipe로
+처리했지만(손 → 얼굴 순으로 옮겨졌다), 두 가지 문제가 있었다:
 
-- **얼굴**: `perception/face_tracker.py`의 `FaceTracker`가 `src.app.run()`의 로컬 cv2
-  미리보기 루프에서 매 프레임 mediapipe FaceMesh로 인식한다(서버 실행, 그대로 유지).
-- **손**: `mobile.html`이 휴대폰 브라우저에서 직접 MediaPipe Tasks Vision
-  `HandLandmarker`를 돌려(CDN, ES 모듈로 로드) 21개 랜드마크(좌표만, 이미지 아님)를
-  매 캡처 프레임마다 `/ws/camera`로 JSON 텍스트 메시지(`{"type": "hand_landmarks",
-  "landmarks": [...]}`)로 보낸다. 손이 하나도 안 보여도 빈 배열로 보낸다 — 서버가 "지금은
-  손이 없다"를 곧바로 알아야 사라진 손 위치를 계속 붙잡고 있지 않는다. `src/api/camera.py`의
-  `Camera`가 최신 값을 저장하고(`latest_hand_landmarks()`), `perception/hand_tracker.py`의
-  `HandTracker`는 **인식은 하지 않고** 그 좌표를 3D 월드 좌표로 변환/시각화만 한다
-  (`process_landmarks()`) — 그래서 서버 쪽 `HandTracker`는 mediapipe에 더 이상 의존하지
-  않는다. HandLandmarker 로드/초기화가 실패하면(오프라인, CDN 접근 불가, 구형 브라우저 등)
-  `mobile.html`이 조용히 손 인식을 비활성 상태로 두고 계속 동작한다(하드웨어/Gemini 미구성과
-  같은 부분 실패 패턴) — 얼굴 인식/idle 두리번거림은 영향받지 않는다.
+1. 컴퓨터 하나가 얼굴+손 인식 추론 + matplotlib 3D 미리보기 렌더링 + 하드웨어 제어를 매
+   프레임 다 하려니 휴대폰이 실제로 보내는 프레임레이트(`FRAME_INTERVAL_MS` ≈ 20fps)를
+   못 따라가서 로봇 반응이 느려지고 뚝뚝 끊겼다.
+2. 서버가 받는 프레임은 JPEG 압축 + 다운스케일을 거쳐 화질이 떨어져, 인식 자체가 잘 안
+   되는 경우도 있었다(특히 얼굴) — 휴대폰이 압축 전 원본 영상에서 직접 인식하면 이 문제도
+   함께 없어진다.
+
+그래서 손에 이어 얼굴도 같은 방식으로 옮겼다: `mobile.html`이 휴대폰 브라우저에서 직접
+MediaPipe Tasks Vision(`HandLandmarker` + `FaceLandmarker`, 같은 CDN 패키지, ES 모듈로
+로드)을 돌려 매 캡처 프레임마다 랜드마크(좌표만, 이미지 아님)를 `/ws/camera`로 JSON 텍스트
+메시지로 보낸다 — 손은 `{"type": "hand_landmarks", "landmarks": [...]}`(21점 전부), 얼굴은
+`{"type": "face_landmarks", "faces": [{"center", "left_eye_outer", "right_eye_outer"}]}`
+(468/478점 중 FaceTracker가 실제로 쓰는 3점만 이름 붙여서 — 대역폭 절약. 인덱스
+1/33/263은 `fundamental.const.FaceTrackerConst`와 `mobile.html`의 JS 상수가 반드시
+일치해야 한다). 손이나 얼굴이 하나도 안 보여도 빈 배열로 보낸다 — 서버가 "지금은 없다"를
+곧바로 알아야 사라진 위치를 계속 붙잡고 있지 않는다.
+
+`src/api/camera.py`의 `Camera`가 최신 값을 각각 저장하고(`latest_hand_landmarks()`/
+`latest_face_landmarks()`), `perception/hand_tracker.py`/`perception/face_tracker.py`의
+`HandTracker`/`FaceTracker`는 **인식은 하지 않고** 그 좌표를 3D 월드 좌표로 변환/시각화만
+한다(`process_landmarks()`) — 그래서 서버 쪽 두 트래커 모두 mediapipe(Python)에 더 이상
+의존하지 않는다. `HandLandmarker`/`FaceLandmarker` 로드/초기화는 서로 독립적으로
+실패할 수 있다(오프라인, CDN 접근 불가, 구형 브라우저 등) — 한쪽이 실패해도
+`mobile.html`이 그 인식만 조용히 비활성 상태로 두고 계속 동작한다(하드웨어/Gemini
+미구성과 같은 부분 실패 패턴). **손 인식(`mobile.html`의 `HAND_TRACKING_ENABLED`)은
+켜져 있다** — 가위바위보 제스처가 이 랜드마크로 동작하기 때문. 대신 **팔이 손 위치로
+움직이는 것(추종)만** `FollowController.hand_follow_enabled`
+(기본값 `FollowControllerConst.HAND_FOLLOW_ENABLED = False`)로 꺼 둔다 — 손 인식/제스처는
+그대로 두고 "팔이 손을 쫓아다니는 것만" 원치 않는다는 요청으로 나뉜 두 스위치다:
+`HAND_TRACKING_ENABLED`(휴대폰, 랜드마크 송신 자체)를 끄면 손 추종과 제스처가 함께
+꺼지고, `HAND_FOLLOW_ENABLED`(서버, `FollowController`)만 끄면 제스처는 유지한 채
+팔 추종만 꺼진다.
 
 두 트래커 다 같은 핀홀 투영 아이디어를 쓴다: 휴대폰 카메라가 end-effector에 달려 있다는
 전제 아래, 기준자(손은 손목~엄지CMC 3.5cm, 얼굴은 양쪽 눈 바깥쪽 끝 9cm)가 화면에 보이는
 크기로부터 핀홀 투영을 역산해 카메라까지 거리를 추정하고(`estimate_depth`), 그 거리와
 end-effector의 FK 변환행렬(`Arm.fk_matrix(q)`)로 랜드마크를 월드 좌표에 올린다
 (`landmark_to_world`). **캘리브레이션한 값이 아니므로 거리는 측정이 아니라 추정치다.**
+`perception/camera_geometry.py`의 `to_landmark()`가 휴대폰이 보낸 `[x,y,z]`/
+`{"x","y","z"}`를 두 트래커가 공유하는 `Landmark` 타입으로 정규화한다.
 
-`src.app.run()`의 결정 루프(인식 → `FollowController.next_command()` → 하드웨어 명령)는
-프레임이 들어올 때마다(최대 ~20fps) 돌지만, 로컬 미리보기 창(cv2 + matplotlib 3D 씬)은
-그보다 훨씬 비싸서 `AppConst.VIS_MIN_INTERVAL_S`로 독립적으로 더 느리게(기본 0.1초 간격)
-갱신한다 — 로봇 동작 자체에는 영향 없는 디버그용 창이라 괜찮다. 실제 하드웨어 명령도
+**몸(어깨) 인식은 얼굴 인식 실패 시 폴백이고, 유일하게 서버가 직접 인식한다** —
+`perception/body_tracker.py`의 `BodyTracker`는 FaceTracker/HandTracker가 휴대폰으로
+옮겨가기 전에 쓰던 것과 같은 패턴(mediapipe `Pose`를 서버에서 직접 실행, `available`
+플래그로 부분 실패)이다. 옆모습이거나 고개를 돌려서 얼굴이 안 잡힐 때도 어깨는 보이는
+경우가 많다는 점을 이용한다 — 사용자가 "사람 인식은 백엔드에서" 명시적으로 요청한
+부분이라 여기만 예외다. 양쪽 어깨(mediapipe Pose 표준 인덱스 11/12) 중점을 몸 중심으로
+쓰고, 어깨 사이 거리(0.4m 가정)로 핀홀 역산해 깊이를 추정한다 — 위 손/얼굴과 같은 방식.
+
+**얼굴 > 몸 우선순위는 "보이느냐"가 아니라 거리 기준이다** — 얼굴까지 거리가
+`FollowControllerConst.FACE_BODY_SWITCH_DISTANCE_M`(기본 1m)보다 가까우면 얼굴을,
+그보다 멀면(얼굴이 안 보여도 마찬가지) 몸이 보이는 한 몸을 추적한다. 멀리서는 얼굴
+랜드마크(특히 눈 사이 거리로 하는 깊이 추정)가 화면에서 작아져 노이즈에 약해지는데,
+어깨는 상대적으로 크고 안정적으로 잡히기 때문이다. `PerceptionLoop.detect_bodies()`도
+비슷한 기준으로(아래 히스테리시스 폭만큼 더 일찍) 호출 여부를 정한다 — 얼굴이 충분히
+가까우면 몸 인식 자체를 건너뛰어(`process_frame()`의 `need_body` 계산) 서버가 하는
+이 유일한 mediapipe 추론의 상시 비용을 줄인다.
+
+**거리 경계에는 히스테리시스(데드밴드)를 둔다** — 단순 부등호 하나만 쓰면(거리 <
+1m ? 얼굴 : 몸) 얼굴 깊이 추정치가 마침 그 경계 근처에서 맴돌 때(랜드마크 잔떨림,
+고개를 살짝 돌리는 정도로도 흔함) 판정이 프레임마다 뒤집혀서, 아래 디바운스가 있어도
+몇 초에 한 번씩 계속 얼굴<->몸을 갈아타며 위아래로 훑는 듯한 진동이 남았다(디바운스는
+"몇 프레임 순간적으로 놓침"은 막아도, 판정 자체가 경계에서 계속 다시 뒤집히는 건
+못 막는다). 그래서 `FollowControllerConst.FACE_BODY_SWITCH_HYSTERESIS_M`(기본
+0.15m)만큼 경계를 두 개로 벌렸다(`FollowController._pick_target()`) — 지금 얼굴을
+보는 중이면 거리가 `FACE_BODY_SWITCH_DISTANCE_M + HYSTERESIS`보다 멀어져야 몸으로,
+지금 몸을 보는 중이면 그보다 `- HYSTERESIS`만큼 가까워져야 얼굴로 되돌아간다. 이
+판정에 쓰는 얼굴 깊이 자체도 `FollowControllerConst.FACE_DEPTH_SMOOTHING`으로 별도
+평활한다(`FollowController._smooth_face_depth()` — `FaceFollower`가 화면 오프셋에
+거는 평활과는 독립된 상태). `PerceptionLoop`의 `need_body` 판정도 이 히스테리시스
+폭만큼 더 가까운 거리에서부터 몸 인식을 켜 둔다 — 정확히 전환 경계에서만 켜면 그
+프레임엔 아직 몸 데이터가 없어 전환이 늦거나, 몸 인식 자체가 들쭉날쭉해져
+히스테리시스를 둔 의미가 없어지기 때문이다.
+
+**대상 전환은 디바운스된다** — 얼굴/몸 인식이 프레임마다 100% 성공하지는 않아서, 이
+디바운스가 없으면 한두 프레임 놓칠 때마다 다른 대상으로(또는 idle로) 갈아타게 되는데,
+코끝(얼굴 중심)과 어깨 중점(몸 중심)은 화면상 높이가 달라서 그때마다 팔 높이(z)가
+왔다갔다 흔들리는 문제가 있었다. `FollowController._pick_target()`으로 "이번 프레임
+기준 이상적인 대상"을 정하고(위 히스테리시스 반영), 그게 지금 추적 중인 대상과
+다르면 바로 갈아타지 않고 `FollowControllerConst.TARGET_SWITCH_TIMEOUT_S`(기본
+0.5초) 동안 계속 그 상태가 유지돼야 실제로 전환한다(`_update_active_target()`). 그
+유예 기간 동안은 이전 대상을 그대로 쓰고, 이번 프레임에 그 데이터가 없으면(예: 살짝
+놓침) 팔은 명령 없이 가만히 있는다 — 엉뚱한 좌표로 움직이지 않게. idle(추적 대상이
+아예 없던 상태)에서 뭔가 새로 나타났을 때는 반응성을 위해 디바운스 없이 바로 추적을
+시작한다. `FollowController`의 우선순위는 **얼굴 > 몸 > 손 > idle**(히스테리시스 +
+디바운스 반영)이다 — `BodyFollower`는 화면 오프셋 → yaw 회전 + 높이 이동(EMA 평활
+포함)까지 `FaceFollower`와 완전히 같은 알고리즘을 쓴다(값은
+`fundamental.const.BodyFollowerConst`로 독립적으로 튜닝 가능).
+
+`PerceptionLoop.process_frame()`의 결정 루프(인식 → `FollowController.next_command()` →
+`ArmService.execute()`)는 프레임이 들어올 때마다(최대 ~20fps) 돌지만, 로컬 미리보기 창
+(cv2 + matplotlib 3D 씬, `PerceptionLoop.update_preview()`)은 그보다 훨씬 비싸서
+`AppConst.VIS_MIN_INTERVAL_S`로 독립적으로 더 느리게(기본 0.1초 간격) 갱신한다 — 로봇
+동작 자체에는 영향 없는 디버그용 창이라 괜찮다. 실제 하드웨어 명령도
 `AppConst.COMMAND_MIN_INTERVAL_S`(기본 0.15초)보다 자주는 나가지 않는다 — 목표가 프레임마다
 조금씩 바뀔 때 그때그때 전부 재명령하면 로봇이 계속 새로 움직이기 시작해서 산만해 보이기
 때문이다(`HardwareActuatorConst.DEFAULT_SPEED_PERCENT`를 낮춘 것과 같은 목적 — "주의사항" 절
-참고).
+참고). `ArmService`는 명령을 실행하는 즉시(하드웨어를 다시 읽지 않고) 그 값을 관절각
+캐시에 반영한다 — 안 그러면 `Q_CACHE_TTL_S`(3초) 동안 추종 루프가 "이미 여러 번 명령해서
+실제로는 많이 움직인 상태"를 모른 채 매번 같은(오래된) 기준 각도에 보정치를 얹어 팔이
+점점 크게 흔들리는 문제가 있었다("주의사항" 절 참고).
 
 ### Gemini 채팅/요약/STT/문서 요약 (`src/api/gemini.py`, `POST /api/ask`)
 
@@ -416,27 +494,32 @@ getUserMedia가 보안 컨텍스트를 요구한다. 서버 간 통신은 브라
 
 가위=스캔, 바위=대화 시작, 보=카메라+조명 끄기. 폰이 올려 준 랜드마크 **하나**를
 팔 추종과 제스처가 함께 쓴다. `mobile.html`의 `HAND_TRACKING_ENABLED`를 false로 두면
-손 추종과 제스처가 **함께** 꺼진다(얼굴 추적·idle 두리번거림·나머지 웹 기능은 유지).
+손 추종과 제스처가 **함께** 꺼진다(얼굴 추적·idle 두리번거림·나머지 웹 기능은 유지) — 팔
+추종만 따로 끄고 싶으면(제스처는 유지) 위 "얼굴/몸/손 인식" 절의 `HAND_FOLLOW_ENABLED`
+참고.
 
 ### 서버 로컬 카메라 미리보기 창 (`src.perception_loop.PerceptionLoop`)
 
-`python main.py`와 `python -m src.app` 둘 다 `src/app.py`의 `run()` 함수 하나를 호출한다
-(중복 구현 방지). `run()`이 하는 일:
+`python main.py`와 `python -m src.app` 둘 다 `src/app.py`의 `run()` 함수 하나를 호출하고,
+그건 `create_app(**kwargs).run()`으로 이어진다(`DeskyApp.run()`) — 중복 구현 방지.
+`DeskyApp.run()`이 하는 일:
 
-1. Flask 서버(`app.run(...)`)를 **백그라운드 스레드**로 띄운다 — `app.run()`은 영원히 블록되는
-   호출이라, 메인 스레드에서 그대로 부르면 그 뒤 코드가 절대 실행되지 않는다.
-2. 메인 스레드에서 `/ws/camera`로 들어온 최신 프레임을 디코드하고, `FaceTracker.process()`로
-   얼굴을(mediapipe, 서버 실행), `HandTracker.process_landmarks()`로 손을(휴대폰이 보낸
-   랜드마크의 좌표 변환만) 각각 처리해 골격을 오버레이한 뒤 `cv2.imshow("Mobile camera", ...)`로
-   서버가 실행 중인 컴퓨터 화면에 띄운다. 같은 프레임의 현재 관절각(FK)과 인식된 얼굴/손의
-   월드 좌표로 "3D scene (robot + hand/face)" 창도 함께 갱신한다(단, 이 미리보기 갱신 자체는
+1. `DeskyApp.start_server()`가 Flask 서버(`self.flask.run(...)`)를 **백그라운드 스레드**로
+   띄운다 — `flask.run()`은 영원히 블록되는 호출이라, 메인 스레드에서 그대로 부르면 그 뒤
+   코드가 절대 실행되지 않는다.
+2. 메인 스레드에서 `PerceptionLoop.run_forever()`가 블로킹된다. 매 새 프레임마다
+   `process_frame()`이: `FaceTracker.process_landmarks()`/`HandTracker.process_landmarks()`로
+   얼굴/손을(둘 다 인식은 휴대폰이 끝냈고, 여기선 좌표 변환만) 처리해 골격을 오버레이한 뒤
+   `cv2.imshow(AppConst.WINDOW_CAMERA, ...)`로 서버가 실행 중인 컴퓨터 화면에 띄운다. 같은
+   프레임의 현재 관절각(FK)과 인식된 얼굴/손의 월드 좌표로 "3D scene (robot + hand/face)"
+   창(`AppConst.WINDOW_SCENE`)도 함께 갱신한다(단, 이 미리보기 갱신 자체는
    `AppConst.VIS_MIN_INTERVAL_S`로 결정 루프보다 느리게 스로틀된다 — 위 "얼굴/손 인식" 절
    참고). **cv2 창 관련 호출은 반드시 메인 스레드에서 실행해야 한다** — macOS에서는 OpenCV
    HighGUI가 메인 스레드가 아니면 `imshow`/`waitKey`를 조용히 무시한다.
 3. `cv2.waitKey(1)`로 HighGUI 이벤트 루프를 돌리면서(이게 없으면 창이 아예 갱신되지 않는다)
    `'q'`/Esc 입력 시 종료한다. `frame_count`가 실제로 바뀐 경우에만 디코드/표시하도록
    체크한다 — `waitKey(1)`은 "최대 1ms"일 뿐 보장이 아니라서, 이 체크가 없으면 휴대폰이 보내는
-   실제 프레임(약 5fps)보다 훨씬 빠르게 같은 프레임을 반복 디코드/표시하게 된다.
+   실제 프레임(최대 ~20fps)보다 훨씬 빠르게 같은 프레임을 반복 디코드/표시하게 된다.
 
 ### 하드웨어 미연결 시 동작
 
@@ -562,15 +645,37 @@ class FaceFollower:
 - 모든 모듈의 콘솔 출력은 `fundamental.logger.Logger.log(tag, message)`를 거쳐 `[TAG] message` 형식으로
   통일된다 (`CONTROLLER`, `ACTUATOR`, `WEBAPP`, `GEMINI`, `STT`, `SCAN`, `DOCSCAN`, `HAND`,
   `CAMERA`, `KINEMATICS`, `URDF` 태그). `Logger.enabled` 플래그 하나로 전체 로그를 끌 수 있다.
-- `FaceTracker`/`Gemini`/`DocumentScanner`는 모두 하드웨어와 같은 "부분 실패" 패턴을 따른다:
-  생성자에서 의존성 실패를 흡수하고 `available`/`configured` 플래그 + `error` 문자열만
-  남긴다. 새 AI 기능을 추가할 때도 이 패턴을 따를 것 — 앱 전체가 죽으면 안 된다. (`HandTracker`는
+- `Gemini`/`DocumentScanner`는 모두 하드웨어와 같은 "부분 실패" 패턴을 따른다: 생성자에서
+  의존성 실패를 흡수하고 `configured` 플래그 + `error` 문자열만 남긴다. 새 AI 기능을
+  추가할 때도 이 패턴을 따를 것 — 앱 전체가 죽으면 안 된다. (`FaceTracker`/`HandTracker`는
   더 이상 이 패턴이 아니다 — 인식 자체를 안 하므로 `available` 개념이 없고, 실패 지점은
-  `mobile.html`의 HandLandmarker 로드 쪽으로 옮겨갔다.)
-- `HardwareActuatorConst.DEFAULT_SPEED_PERCENT`(2%)와 `AppConst.COMMAND_MIN_INTERVAL_S`
-  (0.15초)는 같이 튜닝된 값이다 — 인식/렌더링이 밀렸다가 몰아서 명령이 들어올 때, 속도가
+  `mobile.html`의 Hand/FaceLandmarker 로드 쪽으로 옮겨갔다.)
+- `HardwareActuatorConst.DEFAULT_SPEED_PERCENT`와 `AppConst.COMMAND_MIN_INTERVAL_S`
+  (0.15초)는 같이 튜닝하는 값이다 — 인식/렌더링이 밀렸다가 몰아서 명령이 들어올 때, 속도가
   높거나 명령을 너무 자주 내리면 로봇이 매번 확 움직여서 산만하고 갑작스러워 보인다. 이
-  둘을 더 낮추면 더 완만해지지만 반응은 더 느려진다 — 트레이드오프.
+  둘을 더 낮추면 더 완만해지지만 반응은 더 느려진다 — 트레이드오프. (얼굴 추종 속도 자체를
+  조절하려면 이 둘보다 `FaceFollowerConst.YAW_GAIN`/`HEIGHT_GAIN`(+ 그 STEP_LIMIT들)과
+  `CameraGeometryConst.CENTER_OFFSET_THRESHOLD`가 먼저다 — fundamental/const.py 참고.)
+- **관절각 캐시는 "마지막으로 읽은 값"이 아니라 "마지막으로 명령한 값"으로 갱신된다**
+  (`ArmService._remember_commanded_q()`, `goto_position`/`goto_joints`/`goto_joint` 안에서
+  호출). 추종 루프는 `COMMAND_MIN_INTERVAL_S`(0.15초)마다 "현재 각도 + 이번 보정치"처럼
+  상대적으로 다음 목표를 계산하는데, 그 "현재"를 하드웨어 읽기 캐시(`Q_CACHE_TTL_S`=3초)에서만
+  가져오면 최대 3초 동안 이미 실행된 수십 번의 명령을 반영하지 못한 채 매번 같은(오래된)
+  기준 각도에 새 보정치를 얹게 되어 팔이 점점 크게 흔들리는("폭주") 원인이 된다. 그래서
+  이동 메서드들은 하드웨어를 다시 읽는 대신, 방금 자신이 무엇을 명령했는지를 캐시에 바로
+  채워 넣는다. **팔을 움직이는 새 코드를 추가할 때도 `ArmService`의 이동 메서드를 거칠 것**
+  — 이 메서드들을 우회해서 액추에이터에 직접 명령하면 이 캐시 동기화가 깨진다.
+- `FaceFollower`는 `face.screen_offset`을 바로 안 쓰고 `_smooth()`로 지수이동평균(EMA,
+  `FaceFollowerConst.SCREEN_OFFSET_SMOOTHING`)을 건 값으로 데드존 판정/스텝 계산을 한다 —
+  가만히 있어도 FaceLandmarker 랜드마크가 프레임마다 조금씩 흔들려서, 원본 값을 그대로 쓰면
+  오프셋이 데드존 경계를 넘나들며 팔이 "왔다갔다" 떨리는 현상(limit cycle)이 있었다.
+- `HEIGHT_STEP_LIMIT`(높이 한 스텝의 최대 이동, m)은 `YAW_STEP_LIMIT`(각도, rad)과 단순
+  비교하면 안 된다 — 높이 변화는 IK로 관절 3~5(어깨/팔꿈치/손목) **세 개**를 동시에 움직이는데,
+  이전 값(0.03m)에서는 한 번의 최대 스텝이 팔꿈치를 최대 ~18도까지 움직였다(yaw의 한계인
+  10도보다 큰 데다 관절 세 개가 한꺼번에 움직여서 체감 흔들림이 더 컸다) — "앉아서 좌우
+  이동은 괜찮은데 일어날 때(높이 변화)는 많이 흔들린다"는 증상이 이것이었다. 관절 델타가
+  yaw 쪽과 비슷한 크기가 되도록 0.015m로 낮췄다 — 이 상수를 다시 조절할 땐 값 자체가 아니라
+  `arm.ik((0,0,z+step), seed=q)`로 나오는 실제 관절각 델타를 재보고 맞출 것.
 
 ## 검증 방법 (하드웨어 없이)
 

@@ -201,7 +201,7 @@ class HardwareActuatorConst:
     # 움직여서 산만하고 갑작스러워 보인다. 낮은 속도는 명령 간격이 고르지
     # 않아도 움직임 자체를 완만하게 만든다(AppConst.COMMAND_MIN_INTERVAL_S로
     # 명령 빈도 자체도 같은 이유로 제한한다).
-    DEFAULT_SPEED_PERCENT = 2
+    DEFAULT_SPEED_PERCENT = 6
 
 
 # =============================================================================
@@ -324,6 +324,12 @@ class FaceTrackerConst:
 
     FOCAL_NORM은 여기 없다 — HandTrackerConst.FOCAL_NORM과 같은 값이라
     CameraGeometryConst.FOCAL_NORM 하나로 통합했다(중복 상수 통일).
+
+    LEFT_EYE_OUTER/RIGHT_EYE_OUTER/CENTER_LANDMARK는 이제 파이썬 코드에서는
+    안 쓴다(얼굴 인식이 휴대폰으로 옮겨가서 인덱싱도 휴대폰이 한다) — 다만
+    `src/templates/mobile.html`의 같은 이름 JS 상수가 이 값들과 반드시
+    일치해야 하므로, "실제 정의는 여기, 값이 뭘 뜻하는지"의 기준점으로 남겨
+    둔다.
     """
 
     # 양쪽 눈 바깥쪽 끝(landmark 33=오른쪽, 263=왼쪽) 사이 실제 거리 추정치.
@@ -345,16 +351,31 @@ class FaceFollowerConst:
 
     # 화면 좌우 오프셋(대략 -0.5~0.5)을 1번 관절 각도 보정량(rad)으로 바꾸는
     # 비례 이득 — 실측으로 튜닝 필요.
-    YAW_GAIN = 0.8
+    YAW_GAIN = 0.5
     # 한 번의 갱신에서 1번 관절이 움직일 수 있는 최대 각도(rad) — 큰 오프셋이
     # 갑자기 튀어도 로봇이 한 번에 확 돌지 않도록 하는 안전판.
-    YAW_STEP_LIMIT = math.radians(20)
+    YAW_STEP_LIMIT = math.radians(10)
     # 화면 상하 오프셋(대략 -0.5~0.5)을 높이(z) 보정량(m)으로 바꾸는 비례
     # 이득 — 실측으로 튜닝 필요.
-    HEIGHT_GAIN = 0.2
-    # 한 번의 갱신에서 높이(z)가 움직일 수 있는 최대 거리(m) — YAW_STEP_LIMIT과
-    # 같은 이유의 안전판.
-    HEIGHT_STEP_LIMIT = 0.03
+    HEIGHT_GAIN = 0.14
+    # 한 번의 갱신에서 높이(z)가 움직일 수 있는 최대 거리(m). YAW_STEP_LIMIT과
+    # 같은 이유의 안전판이지만 값을 그냥 맞추면 안 된다 — 높이는 IK로 관절
+    # 3~5(어깨/팔꿈치/손목) 세 개를 동시에 움직이는데, 이전 값(0.03)에서는 한
+    # 번의 최대 스텝이 그 세 관절 중 하나(팔꿈치)를 최대 ~18도까지 움직였다
+    # (yaw 쪽 한계인 10도보다 큼 + 관절 3개가 한꺼번에 움직여서 체감 흔들림이
+    # 더 크다). "앉아서 좌우 이동은 괜찮은데 일어날 때(높이 변화) 많이
+    # 흔들린다"는 문제가 이것 — 세 관절이 비슷한 체감 크기로 움직이도록
+    # 낮췄다.
+    HEIGHT_STEP_LIMIT = 0.015
+    # 화면 오프셋(screen_offset)에 거는 지수이동평균(EMA) 계수 — 매 프레임
+    # (~20fps) 갱신되는 화면 오프셋 중 이 비율만큼만 새 값을 반영하고 나머지는
+    # 이전 평균을 유지한다(1.0이면 평활 없음, 낮을수록 더 매끄럽지만 반응은
+    # 느려진다). 사용자가 가만히 있어도 FaceLandmarker의 프레임 간 랜드마크
+    # 잔떨림(jitter) 때문에 오프셋이 데드존(CENTER_OFFSET_THRESHOLD) 경계를
+    # 넘나들며 팔이 "왔다갔다" 흔들리는 현상(limit cycle)의 원인이었다 — 원본
+    # 오프셋 대신 이 평활값으로 데드존 판정과 스텝 계산을 모두 하면 그 잔떨림이
+    # 걸러진다.
+    SCREEN_OFFSET_SMOOTHING = 0.3
 
 
 # =============================================================================
@@ -389,6 +410,46 @@ class HandFollowerConst:
 
 
 # =============================================================================
+# perception/body_tracker.py
+# =============================================================================
+class BodyTrackerConst:
+    """perception.body_tracker.BodyTracker가 쓰는 상수.
+
+    얼굴 인식(휴대폰)이 실패했을 때(옆모습, 고개를 돌린 경우 등) 폴백으로
+    쓰는 사람 몸(어깨) 인식 — 이것만 유일하게 서버에서 mediapipe로 직접
+    돈다(사용자가 명시적으로 요청한 부분). 얼굴이 보이는 프레임에서는 아예
+    호출되지 않으므로(src/perception_loop.py 참고) 상시 비용은 아니다.
+    """
+
+    # 양쪽 어깨 사이 실제 거리 추정치(성인 평균) — 실측 캘리브레이션 값이
+    # 아니므로 거리 추정은 참고치. FaceTrackerConst.EYE_OUTER_DISTANCE_M,
+    # HandTrackerConst.WRIST_TO_THUMB_CMC_M와 같은 방식(핀홀 역산의 기준자).
+    SHOULDER_WIDTH_M = 0.40
+    # mediapipe Pose 표준 33점 랜드마크 중 양쪽 어깨 인덱스.
+    LEFT_SHOULDER = 11
+    RIGHT_SHOULDER = 12
+    # 어깨 랜드마크의 visibility(0~1)가 이보다 낮으면(다른 신체 부위나 물체에
+    # 가려짐 등) 신뢰하지 않고 몸을 못 찾은 것으로 본다.
+    MIN_LANDMARK_VISIBILITY = 0.5
+
+
+class BodyFollowerConst:
+    """perception.body_tracker.BodyFollower가 쓰는 상수.
+
+    FaceFollowerConst와 같은 개념(화면 오프셋 → yaw 회전 + 높이 이동, 비례
+    이득 + 스텝 한계 + EMA 평활)을 그대로 재사용하되, 몸(어깨) 추적은 얼굴보다
+    랜드마크가 성글고 노이즈 특성이 달라 독립적으로 튜닝할 수 있도록 따로
+    둔다 — 시작값은 FaceFollowerConst와 동일하게 맞췄다.
+    """
+
+    YAW_GAIN = 0.5
+    YAW_STEP_LIMIT = math.radians(10)
+    HEIGHT_GAIN = 0.14
+    HEIGHT_STEP_LIMIT = 0.015
+    SCREEN_OFFSET_SMOOTHING = 0.3
+
+
+# =============================================================================
 # perception/follow_controller.py
 # =============================================================================
 class FollowControllerConst:
@@ -404,6 +465,51 @@ class FollowControllerConst:
     LOOKAROUND_AMPLITUDE = math.radians(40)
     # 왕복 한 사이클(가운데->오른쪽->가운데->왼쪽->가운데) 걸리는 시간(초).
     LOOKAROUND_PERIOD_S = 6.0
+
+    # 손 랜드마크로 팔을 실제로 따라가게 할지 — False면 손은 계속 인식되고
+    # (휴대폰이 계속 보내고, GestureBridge의 가위바위보 판정도 그대로 동작)
+    # 3D 미리보기에도 그려지지만, FollowController는 그 손 위치로 팔을
+    # 움직이지는 않는다(얼굴>몸>idle까지만 본다). "손 인식은 켜고 싶지만
+    # (제스처 때문에) 팔이 손을 쫓아다니는 건 원치 않는다"는 요청으로 추가된
+    # 스위치 — HAND_TRACKING_ENABLED(mobile.html, 랜드마크 송신 자체를 끔)와는
+    # 다른 층위다.
+    HAND_FOLLOW_ENABLED = False
+
+    # 얼굴까지 거리(FaceTracker.estimate_depth, m)가 이보다 멀면 얼굴 대신 몸
+    # (어깨)을 추적 대상으로 쓴다 — 멀리서는 얼굴 랜드마크(특히 눈 사이 거리
+    # 기반 깊이 추정)가 더 부정확해지고 화면에서 차지하는 크기도 작아져
+    # noisy해지는데, 어깨는 상대적으로 크고 안정적으로 잡힌다. 얼굴은 보이는데
+    # 몸이 안 보이면(예: 몸 인식이 아직 안 됨) 그래도 얼굴을 쓴다 — 폴백
+    # 우선순위는 FollowController._pick_target 참고.
+    FACE_BODY_SWITCH_DISTANCE_M = 1.0
+
+    # FACE_BODY_SWITCH_DISTANCE_M 경계에 두는 여유폭(m) — 얼굴 깊이 추정치가
+    # 정확히 그 거리 근처에서 맴돌면(랜드마크 잔떨림 + 고개 각도 변화로 흔함)
+    # 이 여유폭이 없을 때 매 프레임 얼굴<->몸으로 판정이 뒤집혀, 디바운스
+    # 타임아웃이 지날 때마다(또는 need_body 판정이 프레임마다 바뀌어 몸 인식
+    # 자체가 들쭉날쭉해서) 계속 갈아타는 문제가 있었다(TARGET_SWITCH_TIMEOUT_S
+    # 만으로는 "계속 순간적으로 경계를 넘나드는" 느린 진동까지는 못 막는다).
+    # 지금 얼굴을 보고 있으면 거리가 FACE_BODY_SWITCH_DISTANCE_M + 이 값보다
+    # 멀어져야 몸으로, 지금 몸을 보고 있으면 그보다 - 이 값보다 가까워져야
+    # 얼굴로 넘어간다(전형적인 히스테리시스/데드밴드) — FollowController._pick_target 참고.
+    FACE_BODY_SWITCH_HYSTERESIS_M = 0.15
+
+    # 얼굴 거리(depth) 추정치에 거는 지수이동평균(EMA) 계수 — FaceFollower의
+    # SCREEN_OFFSET_SMOOTHING과 같은 이유다. 얼굴<->몸 전환 판정(위 히스테리시스)이
+    # 원본 깊이값의 프레임 간 잔떨림에 흔들리지 않도록, FollowController가 이
+    # 계수로 별도 평활한 깊이를 판정에 쓴다(FaceFollower가 화면 오프셋에 거는
+    # 평활과는 별개 상태).
+    FACE_DEPTH_SMOOTHING = 0.3
+
+    # 추적 대상(얼굴/몸/손)을 바꾸거나 완전히 놓쳤을 때, 그 변화가 이 시간(초)
+    # 동안 계속 유지돼야 실제로 반영한다(디바운스). 얼굴/몸 인식은 프레임마다
+    # 100% 안정적으로 성공하지 않는다 — 한두 프레임 놓쳤다고 바로 다른
+    # 대상으로(또는 idle로) 갈아타면, 코끝(얼굴 중심)과 어깨 중점(몸 중심)의
+    # 화면상 높이가 다르기 때문에 팔이 목표를 바꿀 때마다 높이(z)가 왔다갔다
+    # 흔들리는 문제가 있었다. 이 시간 동안은 마지막으로 확정됐던 대상을 그대로
+    # 유지하고(그 프레임에 데이터가 없으면 팔은 가만히 있는다), 새 후보가
+    # 이 시간만큼 끊기지 않고 계속 더 낫다고 나와야 실제로 전환한다.
+    TARGET_SWITCH_TIMEOUT_S = 0.5
 
 
 # =============================================================================
@@ -561,15 +667,6 @@ class AppConst:
     # 3D 오버레이(모바일 카메라 프레임마다 재계산)가 각자 실제 서보를 읽지
     # 않고 공유하는 캐시 유효 시간.
     Q_CACHE_TTL_S = 3.0
-    # run()의 미리보기 루프에서 mediapipe(얼굴 인식)에 넘기는 프레임 복사본의
-    # 최대 가로 폭(px) — mediapipe 비용은 픽셀 수에 비례하므로, 휴대폰이 그보다
-    # 고해상도로 보내면 이 폭으로 다운스케일한 복사본에서만 인식을 돌린다
-    # (원본 프레임/치수는 오버레이 표시와 깊이 추정에 그대로 쓰인다). 손 인식은
-    # 더 이상 여기서 안 돈다 — 휴대폰(mobile.html)이 자체적으로 MediaPipe
-    # Tasks Vision HandLandmarker를 돌려 랜드마크만 웹소켓으로 보낸다(서버는
-    # 얼굴 인식만 전담) — 안 그러면 폰이 실제로 보내는 ~20fps를 서버가
-    # 얼굴+손 인식을 모두 mediapipe로 처리하며 따라가지 못했다.
-    MEDIAPIPE_MAX_WIDTH = 480
 
     # run()이 실제로 하드웨어에 명령(goto_position/goto_joints)을 내리는 최소
     # 간격(초). 결정 루프(인식 → 추종 명령)는 프레임이 들어올 때마다(최대
@@ -586,6 +683,13 @@ class AppConst:
     # 폰이 보내는 ~20fps를 못 따라간다. 이 창은 로봇 동작에 영향을 주지
     # 않는 디버그용 미리보기이므로 훨씬 느리게 갱신해도 무방하다.
     VIS_MIN_INTERVAL_S = 0.1
+
+    # PerceptionLoop.detect_bodies()가 mediapipe Pose에 넘기는 프레임 복사본의
+    # 최대 가로 폭(px) — mediapipe 비용은 픽셀 수에 비례하므로, 폰이 그보다
+    # 고해상도로 보내면 이 폭으로 다운스케일한 복사본에서만 인식을 돌린다
+    # (원본 프레임/치수는 오버레이 표시와 깊이 추정에 그대로 쓰인다). 얼굴/손
+    # 인식은 이제 서버에서 안 도니 이 상수는 몸(어깨) 폴백 전용이다.
+    BODY_MEDIAPIPE_MAX_WIDTH = 480
 
     # Flask 개발 서버 바인딩. 0.0.0.0이어야 같은 공유기에 붙은 휴대폰이
     # https://<PC의 LAN IP>:8000/mobile 로 접속할 수 있다.

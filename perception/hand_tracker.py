@@ -3,9 +3,11 @@
 손 인식(MediaPipe HandLandmarker) 자체는 더 이상 서버가 하지 않는다 —
 `src/templates/mobile.html`이 휴대폰에서 직접 MediaPipe Tasks Vision을 돌려
 21개 랜드마크만(이미지 아님) 웹소켓(`/ws/camera`)으로 보내고, `src.api.camera.Camera`가
-그걸 받아 저장한다. 서버는 얼굴 인식(perception.face_tracker, mediapipe FaceMesh)만
-전담한다 — 컴퓨터 하나가 얼굴+손 인식을 mediapipe로 전부 처리하면 휴대폰이 실제로
-보내는 ~20fps를 못 따라가 로봇 반응이 느려지고 뚝뚝 끊겼기 때문에 나눈 것.
+그걸 받아 저장한다. 얼굴 인식(perception.face_tracker)도 같은 이유로 같은 방식으로
+휴대폰이 한다 — 컴퓨터 하나가 얼굴+손 인식을 mediapipe로 전부 처리하면 휴대폰이
+실제로 보내는 ~20fps를 못 따라가 로봇 반응이 느려지고 뚝뚝 끊겼고, 압축/전송을
+거친 프레임은 화질도 떨어져 인식 자체가 잘 안 되는 문제도 있었다. 서버는 이제
+어느 쪽도 모델 추론을 하지 않고, 휴대폰이 보낸 랜드마크의 좌표 변환만 한다.
 
 핵심 아이디어(인식 주체가 바뀌어도 동일): 휴대폰 카메라는 end-effector에 달려
 있으므로, 손의 "화면상 크기"로부터 카메라까지의 거리를 역산하고(핀홀 모델),
@@ -24,18 +26,12 @@ mediapipe는 더 이상 이 모듈의 의존성이 아니다(인식이 클라이
 """
 
 import math
-from collections import namedtuple
 
 from kinematics.simulate import draw_points
 from fundamental.const import CameraGeometryConst, HandTrackerConst, HandFollowerConst
 from perception.camera_geometry import camera_frame as _camera_frame
 from perception.camera_geometry import clamp_xy as _clamp_xy
-
-# MediaPipe HandLandmarker의 21개 랜드마크 하나 — 휴대폰이 보내는 [x, y, z]
-# (또는 {x,y,z}) 원소를 이 형태로 감싸서, mediapipe가 서버에서 직접 돌던
-# 시절과 동일한 .x/.y/.z 속성 접근 코드(estimate_depth/landmark_to_world)를
-# 그대로 재사용한다.
-_Landmark = namedtuple("_Landmark", ["x", "y", "z"])
+from perception.camera_geometry import to_landmark as _to_landmark
 
 # 표준 MediaPipe 21점 손 골격 연결 — 예전에는 mediapipe 라이브러리가 이미
 # 만들어 둔 `mp.solutions.hands.HAND_CONNECTIONS`를 그대로 썼지만, 서버가
@@ -52,14 +48,14 @@ HAND_CONNECTIONS = [
 
 
 class Hand:
-    """인식된 손 하나. `landmarks`는 `_Landmark`(x, y, z) 21개,
+    """인식된 손 하나. `landmarks`는 `camera_geometry.Landmark`(x, y, z) 21개,
     `depth`는 추정된 카메라~손 거리(m), `world_points`는 월드 좌표 21개,
     `center`는 손바닥 중심(PALM_QUAD 네 점의 평균 월드 좌표),
     `screen_offset`은 그 중심이 화면 정중앙 (0.5, 0.5)에서 얼마나 벗어났는지
     (dx, dy), 정규화 이미지 좌표 기준(월드 변환 이전 원본 랜드마크에서 계산)."""
 
     def __init__(self, landmarks, depth, world_points, center, screen_offset):
-        """landmarks: `_Landmark` 21개, depth: 추정 거리(m),
+        """landmarks: `camera_geometry.Landmark` 21개, depth: 추정 거리(m),
         world_points: 월드 좌표 (x, y, z) 21개, center: 손바닥 중심 (x, y, z),
         screen_offset: 화면 중앙 대비 오프셋 (dx, dy), 정규화 좌표."""
         self.landmarks = landmarks
@@ -107,7 +103,7 @@ class HandTracker:
         height, width = frame_shape[0], frame_shape[1]
         hands = []
         for raw_landmarks in raw_hands:
-            landmarks = [self._to_landmark(p) for p in raw_landmarks]
+            landmarks = [_to_landmark(p) for p in raw_landmarks]
             depth = self.estimate_depth(landmarks, width, height)
             world_points = [self.landmark_to_world(lm, T_ee, depth) for lm in landmarks]
             center = tuple(sum(world_points[i][a] for i in self.PALM_QUAD) / len(self.PALM_QUAD)
@@ -117,15 +113,6 @@ class HandTracker:
                              sum(p.y for p in palm_landmarks) / len(palm_landmarks) - 0.5)
             hands.append(Hand(landmarks, depth, world_points, center, screen_offset))
         return hands
-
-    @staticmethod
-    def _to_landmark(point) -> _Landmark:
-        """휴대폰이 보낸 랜드마크 하나(`[x, y, z]` 또는 `{"x","y","z"}`)를
-        `_Landmark`로 정규화한다."""
-        if isinstance(point, dict):
-            return _Landmark(float(point["x"]), float(point["y"]), float(point.get("z", 0.0)))
-        x, y, z = point[0], point[1], (point[2] if len(point) > 2 else 0.0)
-        return _Landmark(float(x), float(y), float(z))
 
     def estimate_depth(self, landmarks, frame_width, frame_height) -> float:
         """손이 카메라에서 얼마나 떨어져 있는지(m)를 '화면에 보이는 크기'로 추정한다.

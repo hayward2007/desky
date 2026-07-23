@@ -14,12 +14,12 @@ class Camera:
     """Holds the latest JPEG frame streamed from /mobile over /ws/camera plus
     the routes that expose it. The same WebSocket also carries recorded
     voice-question clips (WebM/Opus) from the mic button (binary, told apart
-    from JPEG by content — SOI marker vs WebM's EBML header) and hand-landmark
-    JSON messages (text) from the phone's own MediaPipe Tasks Vision
-    HandLandmarker (perception.hand_tracker no longer runs hand detection on
-    the server — see its module docstring for why). Voice clips are handed
-    off to `gemini` for transcription and the transcript is sent back over
-    that same connection.
+    from JPEG by content — SOI marker vs WebM's EBML header) and hand/face
+    landmark JSON messages (text) from the phone's own MediaPipe Tasks Vision
+    Hand/FaceLandmarker (perception.hand_tracker/face_tracker no longer run
+    detection on the server — see their module docstrings for why). Voice
+    clips are handed off to `gemini` for transcription and the transcript is
+    sent back over that same connection.
 
     [병합] 이 소켓은 이제 양방향이다. 서버 → 폰 방향으로도 명령을 밀어 넣는다
     (`broadcast()`): 가위바위보 제스처는 서버의 카메라 루프에서 확정되는데
@@ -38,6 +38,10 @@ class Camera:
         # 21 [x, y, z] points (mediapipe-normalized), or [] if the phone is
         # currently seeing no hands. None until the first message arrives.
         self.hand_landmarks = None
+        # Latest face-landmark message from the phone: a list of faces, each
+        # {"center", "left_eye_outer", "right_eye_outer": [x, y, z]}, or []
+        # if the phone currently sees no face. None until the first message.
+        self.face_landmarks = None
         # 서버 → 폰 방향으로 명령을 밀어 넣기 위해 열려 있는 소켓을 들고 있는다
         # (제스처 확정은 카메라 루프에서 일어나는데 실행은 폰이 해야 하므로).
         self.sockets = []
@@ -127,23 +131,32 @@ class Camera:
             Logger.log("CAMERA", "Mobile client disconnected")
 
     def _handle_text_message(self, text):
-        """Parse a text WebSocket message. Only "hand_landmarks" is defined
-        today (mobile.html's phone-side HandLandmarker results); anything
-        else (malformed JSON, unknown type) is logged and ignored rather than
-        killing the connection — a bad client message must never crash the
-        loop that also carries the JPEG stream and voice clips."""
+        """Parse a text WebSocket message. "hand_landmarks" and
+        "face_landmarks" are defined today (mobile.html's phone-side
+        Hand/FaceLandmarker results); anything else (malformed JSON, unknown
+        type) is logged and ignored rather than killing the connection — a
+        bad client message must never crash the loop that also carries the
+        JPEG stream and voice clips."""
         try:
             msg = json.loads(text)
         except (ValueError, TypeError) as e:
             Logger.log("CAMERA", f"Ignoring malformed text message: {e}")
             return
-        if not isinstance(msg, dict) or msg.get("type") != "hand_landmarks":
+        if not isinstance(msg, dict):
             return
-        landmarks = msg.get("landmarks")
-        if not isinstance(landmarks, list):
-            return
-        with self.lock:
-            self.hand_landmarks = landmarks
+        msg_type = msg.get("type")
+        if msg_type == "hand_landmarks":
+            landmarks = msg.get("landmarks")
+            if not isinstance(landmarks, list):
+                return
+            with self.lock:
+                self.hand_landmarks = landmarks
+        elif msg_type == "face_landmarks":
+            faces = msg.get("faces")
+            if not isinstance(faces, list):
+                return
+            with self.lock:
+                self.face_landmarks = faces
 
     def latest_frame(self):
         """GET /api/camera/latest.jpg"""
@@ -183,10 +196,18 @@ class Camera:
         with self.lock:
             return self.hand_landmarks
 
+    def latest_face_landmarks(self):
+        """Thread-safe read of the latest phone-reported face landmarks.
+        Same contract as latest_hand_landmarks() (None until first message,
+        [] means "no face right now", phone reports every tick so no
+        staleness timeout is needed)."""
+        with self.lock:
+            return self.face_landmarks
+
     def register(self, app, sock):
         """이 객체가 담당하는 라우트를 Flask 앱/Sock에 붙인다.
 
-        WS   /ws/camera               ws_camera    (폰 → 서버: JPEG·음성·손 랜드마크,
+        WS   /ws/camera               ws_camera    (폰 → 서버: JPEG·음성·손/얼굴 랜드마크,
                                                     서버 → 폰: transcript·제스처 명령)
         GET  /api/camera/latest.jpg   latest_frame (대시보드 미리보기)
         GET  /api/camera/status       status

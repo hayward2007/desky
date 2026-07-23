@@ -508,11 +508,12 @@
     ctx.scale(-1, 1);
     ctx.drawImage(video, -vw / 2, -vh / 2, vw, vh);
     ctx.restore();
-    // 손 인식은 이 방향 보정이 끝난 캔버스에 대고 돈다(아래 10번 섹션) — 서버가
-    // 받는 프레임과 정확히 같은 좌표계(이미 정방향으로 회전/미러링됨)여야
-    // 랜드마크 좌표가 서버 쪽 계산(깊이 추정·월드 변환·제스처 판정)과 어긋나지
-    // 않는다.
+    // 손/얼굴 인식은 둘 다 이 방향 보정이 끝난 캔버스에 대고 돈다(아래 10번
+    // 섹션) — 서버가 받는 프레임과 정확히 같은 좌표계(이미 정방향으로
+    // 회전/미러링됨)여야 랜드마크 좌표가 서버 쪽 계산(깊이 추정·월드 변환·
+    // 제스처 판정)과 어긋나지 않는다.
     if (window.__sendHandLandmarks) window.__sendHandLandmarks(canvas, ws);
+    if (window.__sendFaceLandmarks) window.__sendFaceLandmarks(canvas, ws);
     canvas.toBlob((blob) => {
       if (blob && ws && ws.readyState === WebSocket.OPEN) {
         ws.send(blob);
@@ -593,6 +594,53 @@
   const askTextEl = document.getElementById("ask-text");
   const answerBlock = document.getElementById("answer-block");
 
+  // iOS Safari의 speechSynthesis는 "사용자 제스처 호출 스택 안"에서 speak()가
+  // 불려야만 소리를 낸다 — 이 앱의 TTS는 거의 다 `await fetch(...)` 뒤에
+  // speak()를 부르므로(Gemini 응답을 받은 다음에야 읽을 수 있으니 당연히
+  // 그렇다) 그 시점엔 이미 제스처 컨텍스트가 끊겨 iOS가 조용히 아무 것도
+  // 하지 않는다(에러도 안 남는다 — 그래서 "안 된다"로만 보인다). 페이지에서
+  // 처음 탭이 발생한 그 순간(동기 호출 스택 안)에 무음(volume=0) 발화를 한 번
+  // 실행해 두면, Web Audio unlock과 같은 원리로 그 뒤로는 같은 페이지 세션
+  // 안에서 비동기로 부르는 speak()도 정상 재생된다 — 매번 다시 unlock할
+  // 필요는 없다.
+  let ttsUnlocked = false;
+  function unlockSpeechSynthesis() {
+    if (ttsUnlocked || !('speechSynthesis' in window)) return;
+    ttsUnlocked = true;
+    const warmup = new SpeechSynthesisUtterance(" ");
+    warmup.volume = 0;
+    window.speechSynthesis.speak(warmup);
+  }
+  document.addEventListener("pointerdown", unlockSpeechSynthesis, { once: true });
+
+  // 한국어 음성을 명시적으로 골라 둔다 — voice를 안 정하고 lang="ko-KR"만
+  // 믿으면, 기기에 맞는 음성이 아직 로드되지 않았거나(iOS는 getVoices()가
+  // 비동기로 채워진다) 없는 경우 일부 iOS 버전에서 소리 없이 실패하는 사례가
+  // 있었다. voiceschanged 이후 다시 골라 캐시해 둔다.
+  let koVoice = null;
+  function pickKoreanVoice() {
+    if (!('speechSynthesis' in window)) return;
+    const voices = window.speechSynthesis.getVoices();
+    koVoice = voices.find(v => v.lang === "ko-KR") || voices.find(v => v.lang && v.lang.startsWith("ko")) || null;
+  }
+  if ('speechSynthesis' in window) {
+    pickKoreanVoice();
+    window.speechSynthesis.onvoiceschanged = pickKoreanVoice;
+  }
+
+  // 발화 중인 utterance를 여기 붙잡아 둔다 — WebKit은 다른 참조가 없는
+  // SpeechSynthesisUtterance를 말하는 도중에 가비지 컬렉트해서 소리가
+  // 중간에(또는 아예) 끊기는 알려진 버그가 있다. 지역 변수로만 두면 이
+  // 참조가 사라지므로, 끝날 때까지 모듈 스코프에 붙잡아 둔다.
+  let activeUtterance = null;
+  function makeUtterance(text) {
+    const utter = new SpeechSynthesisUtterance(text);
+    utter.lang = "ko-KR"; utter.rate = 1.0;
+    if (koVoice) utter.voice = koVoice;
+    activeUtterance = utter;
+    return utter;
+  }
+
   // 답이 비면 구분선과 라벨까지 접는다. 답을 쓰는 곳이 여러 군데라
   // 각 호출부를 고치는 대신 내용 변화를 관찰해 한 곳에서 처리한다.
   new MutationObserver(() => {
@@ -621,8 +669,7 @@
   function speak(text) {
     if (!('speechSynthesis' in window) || !text || !text.trim()) return;
     window.speechSynthesis.cancel();
-    const utter = new SpeechSynthesisUtterance(text);
-    utter.lang = "ko-KR"; utter.rate = 1.0;
+    const utter = makeUtterance(text);
     window.speechSynthesis.speak(utter);
   }
   function stopSpeak() { window.speechSynthesis.cancel(); }
@@ -706,7 +753,7 @@
   function speakThenResume(text) {
     if (!('speechSynthesis' in window) || !text || !text.trim()) { resumeListening(); return; }
     speaking = true; window.speechSynthesis.cancel();
-    const utter = new SpeechSynthesisUtterance(text); utter.lang = "ko-KR"; utter.rate = 1.0;
+    const utter = makeUtterance(text);
     const done = () => {
       if (speakWatchdog) { clearTimeout(speakWatchdog); speakWatchdog = null; }
       if (!speaking) return;
@@ -1446,51 +1493,83 @@
 
 <script type="module">
   /* =====================================================================
-     10. 손 인식 — 휴대폰에서 직접 MediaPipe Tasks Vision(HandLandmarker)을
-        돌려서 21개 랜드마크만(이미지 자체가 아니라 좌표만) 웹소켓으로 보낸다.
+     10. 손/얼굴 인식 — 휴대폰에서 직접 MediaPipe Tasks Vision
+        (HandLandmarker + FaceLandmarker)을 돌려서 좌표만(이미지 자체가
+        아니라) 웹소켓으로 보낸다.
 
         원래는 서버(컴퓨터)가 얼굴 인식과 손 인식을 둘 다 mediapipe(Python)로
         처리했는데, 컴퓨터 하나가 두 모델 추론 + matplotlib 3D 렌더링 +
         하드웨어 제어까지 매 프레임 다 하려니 폰이 실제로 보내는 프레임레이트
         (~20fps, 위 FRAME_INTERVAL_MS)를 못 따라가서 로봇 반응이 느려지고
-        뚝뚝 끊겼다. 그래서 손 인식은 폰이 직접(로컬) 하고, 서버는 얼굴 인식
-        (mediapipe FaceMesh)만 전담한다 — perception/hand_tracker.py,
+        뚝뚝 끊겼다. 그래서 손 인식에 이어 얼굴 인식도 폰이 직접(로컬) 한다 —
+        얼굴은 그것 말고도 서버가 받는 프레임이 JPEG 압축 + 다운스케일을 거쳐
+        화질이 떨어지는 바람에 인식 자체가 잘 안 되는 문제도 있었는데, 압축
+        전 원본 영상에서 직접 인식하면 그 문제도 같이 없어진다. 서버(컴퓨터)는
+        이제 얼굴/손 어느 쪽도 모델 추론을 하지 않는다 —
+        perception/hand_tracker.py, perception/face_tracker.py,
         src/api/camera.py 참고.
 
-        [병합] 여기서 보낸 랜드마크 하나가 서버에서 두 갈래로 쓰인다:
+        [병합] 손 랜드마크는 서버에서 두 갈래로 쓰인다:
           ① perception/follow_controller.py — 팔이 손을 따라가는 추종
           ② perception/gesture.py           — 가위바위보 판정(위 8번 섹션)
-        그래서 아래 스위치를 false로 두면 손 추종과 제스처가 **함께** 꺼진다
-        (얼굴 추적과 idle 두리번거림, 그리고 버튼·음성으로 하는 모든 웹 기능은
-        그대로 동작한다).
+        아래 HAND_TRACKING_ENABLED는 그 둘의 **입력 자체**(랜드마크 전송)를
+        끄는 스위치다 — false면 손 추종과 제스처가 함께 꺼진다. 팔이 손을
+        따라가는 것"만" 끄고 싶다면(가위바위보는 계속 쓰고 싶을 때) 여기가
+        아니라 서버 쪽 `fundamental.const.FollowControllerConst.HAND_FOLLOW_ENABLED`를
+        False로 두는 게 맞다 — 그러면 손 랜드마크는 계속 전송/인식되어
+        제스처는 그대로 동작하고, `FollowController`만 그 위치로 팔을
+        움직이지 않는다. 얼굴 랜드마크는 팔 추종에만 쓰이므로
+        FACE_TRACKING_ENABLED는 독립적으로 켜고 끌 수 있다 — 다 꺼도
+        idle 두리번거림, 그리고 버튼·음성으로 하는 모든 웹 기능은 그대로
+        동작한다.
 
         위 1번 섹션의 captureLoop()이 방향 보정(회전 + 좌우 미러링)까지 끝낸
-        캡처 캔버스(#capture)에 대고 돌린다 — 서버가 받는 좌표계와 똑같은
-        기준이어야 랜드마크 좌표가 서버 쪽 깊이 추정/월드 변환과 어긋나지
-        않는다. 이 스크립트가 로드/초기화에 실패해도(오프라인, 구형 브라우저,
-        CDN 접근 불가 등) 조용히 비활성으로 남는다 — 손 인식 없이 얼굴 인식/
-        idle 두리번거림만으로 계속 동작한다(perception 패키지의 "부분 실패"
-        관례와 같은 정신).
+        캡처 캔버스(#capture)에 대고 둘 다 돌린다 — 서버가 받는 좌표계와
+        똑같은 기준이어야 랜드마크 좌표가 서버 쪽 깊이 추정/월드 변환과
+        어긋나지 않는다. 이 스크립트가 로드/초기화에 실패해도(오프라인, 구형
+        브라우저, CDN 접근 불가 등) 조용히 비활성으로 남는다 — 손/얼굴
+        인식 없이 idle 두리번거림만으로 계속 동작한다(perception 패키지의
+        "부분 실패" 관례와 같은 정신). 손과 얼굴의 초기화 실패는 서로
+        독립적이다 — 한쪽이 실패해도 다른 쪽은 계속 시도한다.
      ===================================================================== */
   import {
     HandLandmarker,
+    FaceLandmarker,
     FilesetResolver,
   } from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.21";
 
-  // 손 추적을 통째로 끄는 스위치. false면 HandLandmarker 자체를 로드/초기화
-  // 하지 않는다(폰 배터리/CPU도 아낌). 병합 후에는 제스처(가위바위보)도 이
-  // 랜드마크를 입력으로 쓰므로, 끄면 손 추종과 제스처가 함께 비활성이 된다 —
-  // 서버는 "손 없음"과 똑같이 동작해 얼굴 추적/idle 두리번거림만 남는다
-  // (서버 쪽은 손댈 필요 없음).
+  // 손 인식 자체(랜드마크 전송)를 통째로 끄는 스위치. false면 HandLandmarker
+  // 자체를 로드/초기화하지 않는다(폰 배터리/CPU도 아낌) — 이러면 손 추종과
+  // 제스처(가위바위보)가 함께 비활성이 된다(둘 다 같은 랜드마크를 쓰므로).
+  // "팔이 손을 따라가는 것만" 끄고 싶다면(제스처는 계속 쓰고 싶을 때) 여기를
+  // 건드리지 말고 서버 쪽 FollowControllerConst.HAND_FOLLOW_ENABLED를 끌 것 —
+  // 위 주석 참고.
   const HAND_TRACKING_ENABLED = true;
+  // 얼굴 추적 스위치. false면 FaceLandmarker를 로드/초기화하지 않는다 —
+  // 서버는 "얼굴 없음"과 똑같이 동작해 손 추종/idle 두리번거림만 남는다.
+  const FACE_TRACKING_ENABLED = true;
 
   const TASKS_VISION_WASM_URL =
     "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.21/wasm";
   const HAND_MODEL_URL =
     "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/latest/hand_landmarker.task";
+  const FACE_MODEL_URL =
+    "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/latest/face_landmarker.task";
+
+  // FaceTracker가 실제로 쓰는 랜드마크 인덱스 — MediaPipe 얼굴 모델의 표준
+  // 468/478점 위상에서 코끝 근처(1)와 양쪽 눈 바깥쪽 끝(33=오른쪽,
+  // 263=왼쪽)이다. fundamental.const.FaceTrackerConst와 반드시 맞춰야
+  // 한다(둘 중 하나만 바꾸면 서버 깊이 추정이 엉뚱한 랜드마크를 쓰게 된다).
+  // 468점 전체를 보내지 않고 이 3개만 뽑아 보내는 이유는 대역폭 절약 —
+  // FaceTracker/FaceFollower가 필요로 하는 건 이 3점뿐이다.
+  const FACE_CENTER_LANDMARK = 1;
+  const FACE_LEFT_EYE_OUTER = 33;
+  const FACE_RIGHT_EYE_OUTER = 263;
 
   let handLandmarker = null;
   let handLandmarkerReady = false;
+  let faceLandmarker = null;
+  let faceLandmarkerReady = false;
 
   /** 지정한 실행 방식(GPU/CPU)으로 HandLandmarker 인스턴스를 만든다. */
   async function createHandLandmarker(vision, delegate) {
@@ -1501,19 +1580,50 @@
     });
   }
 
+  /** 지정한 실행 방식(GPU/CPU)으로 FaceLandmarker 인스턴스를 만든다. */
+  async function createFaceLandmarker(vision, delegate) {
+    return FaceLandmarker.createFromOptions(vision, {
+      baseOptions: { modelAssetPath: FACE_MODEL_URL, delegate },
+      numFaces: 1,
+      runningMode: "VIDEO",
+    });
+  }
+
   (async () => {
-    if (!HAND_TRACKING_ENABLED) return;
+    if (!HAND_TRACKING_ENABLED && !FACE_TRACKING_ENABLED) return;
+    let vision;
     try {
-      const vision = await FilesetResolver.forVisionTasks(TASKS_VISION_WASM_URL);
-      try {
-        handLandmarker = await createHandLandmarker(vision, "GPU");
-      } catch (e) {
-        // 일부 브라우저/기기는 GPU delegate를 못 쓴다 — CPU로 재시도.
-        handLandmarker = await createHandLandmarker(vision, "CPU");
-      }
-      handLandmarkerReady = true;
+      vision = await FilesetResolver.forVisionTasks(TASKS_VISION_WASM_URL);
     } catch (e) {
-      console.warn("HandLandmarker unavailable, hand tracking disabled:", e);
+      console.warn("MediaPipe Tasks Vision runtime unavailable, hand/face tracking disabled:", e);
+      return;
+    }
+
+    if (HAND_TRACKING_ENABLED) {
+      try {
+        try {
+          handLandmarker = await createHandLandmarker(vision, "GPU");
+        } catch (e) {
+          // 일부 브라우저/기기는 GPU delegate를 못 쓴다 — CPU로 재시도.
+          handLandmarker = await createHandLandmarker(vision, "CPU");
+        }
+        handLandmarkerReady = true;
+      } catch (e) {
+        console.warn("HandLandmarker unavailable, hand tracking disabled:", e);
+      }
+    }
+
+    if (FACE_TRACKING_ENABLED) {
+      try {
+        try {
+          faceLandmarker = await createFaceLandmarker(vision, "GPU");
+        } catch (e) {
+          faceLandmarker = await createFaceLandmarker(vision, "CPU");
+        }
+        faceLandmarkerReady = true;
+      } catch (e) {
+        console.warn("FaceLandmarker unavailable, face tracking disabled:", e);
+      }
     }
   })();
 
@@ -1534,6 +1644,28 @@
       type: "hand_landmarks",
       landmarks: landmarks.map((hand) => hand.map((p) => [p.x, p.y, p.z])),
     }));
+  };
+
+  /** 위와 같은 이유로 매 프레임 호출된다. 얼굴이 없어도 빈 배열을 그대로
+   * 보낸다(src/api/camera.py의 Camera.latest_face_landmarks 참고). 468/478개
+   * 전체 랜드마크가 아니라 FaceTracker가 실제로 쓰는 3개(코끝 + 양쪽 눈
+   * 바깥쪽 끝)만 이름 붙여 보낸다 — perception/face_tracker.py의
+   * process_landmarks()가 기대하는 모양과 정확히 맞아야 한다. */
+  window.__sendFaceLandmarks = function (canvasEl, wsConn) {
+    if (!faceLandmarkerReady || !wsConn || wsConn.readyState !== WebSocket.OPEN) return;
+    let result;
+    try {
+      result = faceLandmarker.detectForVideo(canvasEl, performance.now());
+    } catch (e) {
+      return;
+    }
+    const facesRaw = (result && result.faceLandmarks) || [];
+    const faces = facesRaw.map((lm) => ({
+      center: [lm[FACE_CENTER_LANDMARK].x, lm[FACE_CENTER_LANDMARK].y, lm[FACE_CENTER_LANDMARK].z],
+      left_eye_outer: [lm[FACE_LEFT_EYE_OUTER].x, lm[FACE_LEFT_EYE_OUTER].y, lm[FACE_LEFT_EYE_OUTER].z],
+      right_eye_outer: [lm[FACE_RIGHT_EYE_OUTER].x, lm[FACE_RIGHT_EYE_OUTER].y, lm[FACE_RIGHT_EYE_OUTER].z],
+    }));
+    wsConn.send(JSON.stringify({ type: "face_landmarks", faces }));
   };
 </script>
 </body>

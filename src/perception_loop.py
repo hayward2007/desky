@@ -18,7 +18,31 @@
 
 즉 손 목록 하나를 두 소비자가 나눠 쓴다. 가위바위보 판정에 필요한 건 랜드마크
 21개의 x/y뿐이고 그건 휴대폰이 보내 준 값으로 충분하므로, 서버에서 mediapipe
-Hands를 다시 돌릴 이유가 없다(얼굴 인식만 서버에 남는다).
+Hands를 다시 돌릴 이유가 없다.
+
+[추가 이관] 얼굴 인식도 같은 이유로 같은 방식으로 휴대폰으로 옮겼다 — 서버가
+얼굴+손을 둘 다 mediapipe로 처리하면 폰이 실제로 보내는 ~20fps를 못 따라갔고,
+그것과 별개로 서버가 받는 프레임은 JPEG 압축 + 다운스케일 때문에 화질이
+떨어져 인식 자체가 잘 안 되는 문제도 있었다(흐릿한 프레임 → FaceMesh가 얼굴을
+못 잡음). 휴대폰이 압축 전 원본 영상에서 직접 인식하면 프레임레이트와 화질
+문제가 한 번에 해결된다:
+
+    휴대폰(MediaPipe Tasks Vision) → /ws/camera → Camera.face_landmarks
+        → FaceTracker.process_landmarks() → FollowController (팔 추종)
+
+이제 서버는 얼굴/손 어느 쪽도 모델 추론을 하지 않는다 — 둘 다 좌표 변환만
+한다. mediapipe(Python)는 대부분 이 루프의 의존성이 아니게 됐다.
+
+[몸 폴백 추가] 얼굴 인식이 실패하는 경우(옆모습, 고개를 돌린 경우 등)를 위해
+사람 몸(어깨) 인식을 폴백으로 추가했다 — 이건 사용자가 명시적으로 서버에서
+돌아야 한다고 요청한 유일한 예외다:
+
+    카메라 프레임(수신된 JPEG) → perception.body_tracker.BodyTracker.process()
+        (서버 mediapipe Pose, 얼굴이 안 보일 때만) → FollowController (팔 추종)
+
+`FollowController`의 우선순위는 얼굴 > 몸 > 손 > idle이다. 얼굴이 보이는
+프레임에서는 몸 인식 자체를 건너뛰므로(아래 `detect_bodies()` 참고), 서버가
+하는 이 유일한 mediapipe 추론도 상시 비용은 아니다.
 
 세 가지 일이 **서로 다른 주기**로 돈다 — 이것도 병합에서 정리한 부분이다:
   1. 인식/판단  : 새 프레임이 올 때마다(최대 ~20fps). 상태 머신이 최신이어야 함.
@@ -33,8 +57,9 @@ import time
 import cv2
 import numpy as np
 
-from fundamental.const import AppConst
+from fundamental.const import AppConst, FollowControllerConst
 from fundamental.logger import Logger
+from perception.body_tracker import BodyTracker
 from perception.face_tracker import FaceTracker
 from perception.follow_controller import FollowController
 from perception.hand_tracker import HandTracker
@@ -46,9 +71,20 @@ class PerceptionLoop:
     """카메라 → 인식 → 추종/제스처 → 미리보기까지를 담당하는 루프 객체."""
 
     # 상수 설명은 fundamental.const.AppConst 참고.
-    MEDIAPIPE_MAX_WIDTH = AppConst.MEDIAPIPE_MAX_WIDTH
     COMMAND_MIN_INTERVAL_S = AppConst.COMMAND_MIN_INTERVAL_S
     VIS_MIN_INTERVAL_S = AppConst.VIS_MIN_INTERVAL_S
+    BODY_MEDIAPIPE_MAX_WIDTH = AppConst.BODY_MEDIAPIPE_MAX_WIDTH
+    # FollowController와 같은 값을 공유한다 — 얼굴이 이 거리보다 가까우면
+    # FollowController가 몸으로 갈아탈 일이 없으니 몸 인식 자체를 건너뛴다
+    # (fundamental.const.FollowControllerConst 참고).
+    FACE_BODY_SWITCH_DISTANCE_M = FollowControllerConst.FACE_BODY_SWITCH_DISTANCE_M
+    # FollowController._pick_target의 히스테리시스 폭 — 몸 인식은 이 폭만큼
+    # 더 일찍(가까운 거리에서부터) 켜 둔다. 그래야 얼굴이 히스테리시스
+    # 경계(FACE_BODY_SWITCH_DISTANCE_M + 이 값)를 실제로 넘어 몸으로 갈아탈
+    # 시점에 몸 데이터가 이미 준비돼 있다 — 정확히 경계에서만 켜면 그 프레임엔
+    # 아직 몸이 안 잡혀 전환이 한 박자 늦거나, 몸 인식 자체가 들쭉날쭉해져
+    # 히스테리시스를 둔 의미가 없어진다.
+    FACE_BODY_SWITCH_HYSTERESIS_M = FollowControllerConst.FACE_BODY_SWITCH_HYSTERESIS_M
 
     def __init__(self, arm_service, camera, renderer,
                  gesture_bridge=None, show_preview=True):
@@ -66,14 +102,15 @@ class PerceptionLoop:
         self.gesture_bridge = gesture_bridge
         self.show_preview = show_preview
 
-        # 손: 인식은 휴대폰이 한다 — 이 객체는 좌표 변환/시각화만 담당한다.
+        # 손/얼굴 인식은 둘 다 휴대폰이 한다 — 이 객체들은 좌표 변환/시각화만
+        # 담당한다(모델 추론 없음, mediapipe 의존성 없음).
         self.hand_tracker = HandTracker()
-        # 얼굴: mediapipe FaceMesh가 서버에서 돈다. mediapipe가 없으면
-        # available이 False가 되고 process()가 빈 리스트를 돌려준다(앱은 계속 뜸).
-        self.face_tracker = FaceTracker(max_num_faces=1,
-                                        min_detection_confidence=0.5,
-                                        min_tracking_confidence=0.5)
-        # 얼굴 > 손 > idle 우선순위와 두리번거리기 상태 머신.
+        self.face_tracker = FaceTracker()
+        # 몸(어깨) 인식은 얼굴 인식 실패 시 폴백으로 서버가 직접 mediapipe
+        # Pose를 돌린다 — mediapipe가 없으면 available이 False가 되어
+        # process()가 빈 리스트를 돌려준다(앱은 계속 뜸).
+        self.body_tracker = BodyTracker()
+        # 얼굴 > 몸 > 손 > idle 우선순위와 두리번거리기 상태 머신.
         self.follow_controller = FollowController(arm_service.arm)
 
         self.scene = ScenePreview(renderer) if show_preview else None
@@ -124,33 +161,59 @@ class PerceptionLoop:
         q = self.arm_service.current_q_or_home()
         T_ee = self.arm_service.ee_matrix(q)
 
-        faces = self.detect_faces(frame, T_ee)
+        faces = self.collect_faces(T_ee, frame.shape)
+        # 몸(어깨) 인식은 얼굴이 안 보이거나, 보여도 FollowController가 몸으로
+        # 갈아탈 만큼 멀 때만 돈다(FACE_BODY_SWITCH_DISTANCE_M) — 서버가 하는
+        # 유일한 mediapipe 추론이라, 필요할 때만 돌려 비용을 아낀다. 얼굴이
+        # 가까이 있으면 몸 인식 자체를 건너뛴다. 경계에서 히스테리시스 폭만큼
+        # 더 일찍(가까운 쪽에서부터) 켜는 이유는 위 FACE_BODY_SWITCH_HYSTERESIS_M
+        # 참고 — FollowController가 실제로 몸으로 갈아타는 시점보다 몸 인식이
+        # 늦게 켜지면 그 히스테리시스를 둔 의미가 없어진다.
+        primary_face = faces[0] if faces else None
+        need_body = (
+            primary_face is None
+            or primary_face.depth >= self.FACE_BODY_SWITCH_DISTANCE_M - self.FACE_BODY_SWITCH_HYSTERESIS_M
+        )
+        bodies = self.detect_bodies(frame, T_ee) if need_body else []
         hands = self.collect_hands(T_ee, frame.shape)
 
         now = time.monotonic()
-        self.drive_arm(faces, hands, T_ee, q, now)
+        self.drive_arm(faces, hands, bodies, T_ee, q, now)
         gesture = self.update_gestures(hands, frame.shape)
-        self.update_preview(frame, faces, hands, gesture, q, T_ee, now)
+        self.update_preview(frame, faces, hands, bodies, gesture, q, T_ee, now)
 
     # ------------------------------------------------------------------
     # 인식
     # ------------------------------------------------------------------
-    def detect_faces(self, frame, T_ee):
-        """프레임에서 얼굴을 찾는다(서버 mediapipe FaceMesh).
+    def collect_faces(self, T_ee, frame_shape):
+        """휴대폰이 보낸 얼굴 랜드마크를 월드 좌표 `Face` 목록으로 바꾼다.
+
+        collect_hands()와 같은 이유로 같은 모양이다 — 인식(모델 추론)은 폰이
+        끝냈으므로 여기서는 좌표 계산만 한다. 폰이 아직 아무것도 안 보냈으면
+        빈 목록.
+        """
+        raw_faces = self.camera.latest_face_landmarks()
+        if not raw_faces:
+            return []
+        return self.face_tracker.process_landmarks(raw_faces, T_ee, frame_shape)
+
+    def detect_bodies(self, frame, T_ee):
+        """프레임에서 사람 몸(어깨)을 찾는다(서버 mediapipe Pose) — 얼굴
+        인식이 실패했을 때만 호출부(process_frame)가 부르는 폴백이다.
 
         mediapipe 비용은 픽셀 수에 비례하므로, 폰이 큰 해상도로 보내면
-        MEDIAPIPE_MAX_WIDTH로 줄인 **복사본**에서만 인식을 돌린다. 랜드마크는
-        정규화 좌표(0~1)라 비율만 유지하면 정확도에 영향이 없고, 깊이 추정에는
-        원본 크기(`frame.shape`)를 그대로 넘긴다 — 핀홀 계산이 실제 카메라
-        화각 기준이라 축소본 크기를 쓰면 거리가 어긋난다.
+        BODY_MEDIAPIPE_MAX_WIDTH로 줄인 **복사본**에서만 인식을 돌린다.
+        랜드마크는 정규화 좌표(0~1)라 비율만 유지하면 정확도에 영향이 없고,
+        깊이 추정에는 원본 크기(`frame.shape`)를 그대로 넘긴다 — 핀홀 계산이
+        실제 카메라 화각 기준이라 축소본 크기를 쓰면 거리가 어긋난다.
         """
         rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         height, width = rgb.shape[:2]
-        if width > self.MEDIAPIPE_MAX_WIDTH:
-            scale = self.MEDIAPIPE_MAX_WIDTH / width
+        if width > self.BODY_MEDIAPIPE_MAX_WIDTH:
+            scale = self.BODY_MEDIAPIPE_MAX_WIDTH / width
             rgb = cv2.resize(rgb, (int(width * scale), int(height * scale)),
                              interpolation=cv2.INTER_AREA)
-        return self.face_tracker.process(rgb, T_ee, frame.shape)
+        return self.body_tracker.process(rgb, T_ee, frame.shape)
 
     def collect_hands(self, T_ee, frame_shape):
         """휴대폰이 보낸 손 랜드마크를 월드 좌표 `Hand` 목록으로 바꾼다.
@@ -167,7 +230,7 @@ class PerceptionLoop:
     # ------------------------------------------------------------------
     # 판단 → 동작
     # ------------------------------------------------------------------
-    def drive_arm(self, faces, hands, T_ee, q, now):
+    def drive_arm(self, faces, hands, bodies, T_ee, q, now):
         """추종 상태 머신을 갱신하고, 간격이 되면 실제 하드웨어 명령을 낸다.
 
         판단(`next_command`)은 **매 프레임** 부른다 — 상태 머신 내부의
@@ -175,7 +238,7 @@ class PerceptionLoop:
         COMMAND_MIN_INTERVAL_S 간격으로만 보낸다: 20fps로 새 목표를 계속 주면
         팔이 매번 움직임을 새로 시작해 덜덜거린다.
         """
-        command = self.follow_controller.next_command(faces, hands, T_ee, q)
+        command = self.follow_controller.next_command(faces, hands, bodies, T_ee, q)
         if command is None or not self.arm_service.connected:
             return
         if now - self._last_command_time < self.COMMAND_MIN_INTERVAL_S:
@@ -202,7 +265,7 @@ class PerceptionLoop:
     # ------------------------------------------------------------------
     # 미리보기 (로봇 동작과 무관한 디버그 창)
     # ------------------------------------------------------------------
-    def update_preview(self, frame, faces, hands, gesture, q, T_ee, now):
+    def update_preview(self, frame, faces, hands, bodies, gesture, q, T_ee, now):
         """카메라 창과 3D 씬 창을 갱신한다(간격 제한 있음).
 
         이 창들은 로봇의 동작에 아무 영향을 주지 않는 디버그 보조물인데,
@@ -218,15 +281,17 @@ class PerceptionLoop:
 
         self.face_tracker.draw_overlay(frame, faces)
         self.hand_tracker.draw_overlay(frame, hands)
+        self.body_tracker.draw_overlay(frame, bodies)
         if gesture is not None and self.gesture_bridge is not None:
             self.gesture_bridge.draw(frame, gesture)
         cv2.imshow(AppConst.WINDOW_CAMERA, frame)
 
-        scene = self.scene.draw(q, T_ee, hands, faces,
-                                self.hand_tracker, self.face_tracker)
+        scene = self.scene.draw(q, T_ee, hands, faces, bodies,
+                                self.hand_tracker, self.face_tracker, self.body_tracker)
         cv2.imshow(AppConst.WINDOW_SCENE, scene)
 
     def close(self):
-        """창을 닫고 mediapipe 세션을 정리한다."""
+        """창을 닫고 mediapipe Pose 세션을 정리한다(얼굴/손은 인식을 휴대폰이
+        하므로 서버가 mediapipe 세션을 만드는 건 몸 인식(BodyTracker)뿐)."""
         cv2.destroyAllWindows()
-        self.face_tracker.close()
+        self.body_tracker.close()
