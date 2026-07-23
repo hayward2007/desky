@@ -1197,6 +1197,13 @@
     FilesetResolver,
   } from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.21";
 
+  // 손 추적을 통째로 끄는 스위치. false면 HandLandmarker 자체를 로드/초기화
+  // 하지 않는다(폰 배터리/CPU도 아낌) — 서버는 hand_landmarks 메시지를 아예
+  // 못 받으므로 perception.follow_controller.FollowController는 "손 없음"과
+  // 똑같이 동작해 얼굴 추적/idle 두리번거림만 남는다(서버 쪽은 손댈 필요
+  // 없음). 다시 켜려면 true로.
+  const HAND_TRACKING_ENABLED = false;
+
   const TASKS_VISION_WASM_URL =
     "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.21/wasm";
   const HAND_MODEL_URL =
@@ -1214,6 +1221,7 @@
   }
 
   (async () => {
+    if (!HAND_TRACKING_ENABLED) return;
     try {
       const vision = await FilesetResolver.forVisionTasks(TASKS_VISION_WASM_URL);
       try {
