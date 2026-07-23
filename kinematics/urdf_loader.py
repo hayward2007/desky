@@ -15,7 +15,7 @@ import xml.etree.ElementTree as ET
 from .kinematics import Arm, Joint, _matmul, _translate, _rpy
 from logger import Logger
 
-_DEFAULT_URDF_PATH = os.path.join(os.path.dirname(__file__), "desky.urdf")
+_DEFAULT_URDF_PATH = os.path.join(os.path.dirname(__file__), "configure", "desky.urdf")
 
 
 def _parse_triplet(text, default=(0.0, 0.0, 0.0)):

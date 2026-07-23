@@ -41,7 +41,7 @@ from flask import Flask, Response, jsonify, render_template, request
 from flask_sock import Sock
 
 from kinematics.urdf_loader import load_arm, _DEFAULT_URDF_PATH
-from simulation.simulate import parse_urdf, draw_pose, draw_points, workspace_bounds
+from kinematics.simulate import parse_urdf, draw_pose, draw_points, workspace_bounds
 from logger import Logger
 from src.api.gemini import Gemini
 from src.api.camera import Camera

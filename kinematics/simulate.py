@@ -1,8 +1,8 @@
 """Interactive 3D FK/IK preview of the desky arm — no hardware required.
 
-Renders the arm from the URDF <visual> geometry (solid boxes per link) and lets
-you drive it two ways, reading the same geometry source as the real robot
-(kinematics/desky.urdf):
+Renders the arm from the URDF <visual> geometry and lets you drive it two
+ways, reading the same geometry source as the real robot
+(kinematics/configure/desky.urdf):
 
   * FK: drag one slider per joint (servo degree, 30..330) — the arm redraws
     live and the end-effector position is shown in the title.
@@ -10,6 +10,14 @@ you drive it two ways, reading the same geometry source as the real robot
     joint angles, the sliders jump to the solution, and the pose redraws.
 
 Rendering notes:
+  * <box>/<cylinder> visuals render as-is. <mesh> visuals (the real STL links)
+    render as a bounding-box APPROXIMATION, not the actual mesh — this module
+    is the cheap, always-on preview used by src/app.py's live web dashboard
+    and hand-tracking overlay, redrawn every frame, so it trades geometric
+    fidelity for speed (the alternative — a few hundred thousand real STL
+    triangles reprojected every redraw in pure Python — is far too slow for a
+    live loop). For the real mesh geometry, use kinematics.pybullet_sim
+    (`python -m kinematics.pybullet_sim`) instead.
   * Every box face has its own colour AND a number (1..6): 1 = +Z top,
     2 = -Z bottom, 3 = +X, 4 = -X, 5 = +Y, 6 = -Y (each link's own frame).
   * Each revolute joint's rotation axis is drawn as a yellow arrow.
@@ -22,6 +30,8 @@ Requires matplotlib (not a dependency of the kinematics package itself):
 """
 
 import math
+import os
+import struct
 import xml.etree.ElementTree as ET
 
 import matplotlib.pyplot as plt
@@ -29,8 +39,8 @@ from matplotlib.patches import Patch
 from matplotlib.widgets import Slider, Button, TextBox
 from mpl_toolkits.mplot3d.art3d import Poly3DCollection
 
-from kinematics.kinematics import _matmul, _translate, _rpy, _rot_axis
-from kinematics.urdf_loader import load_arm, _DEFAULT_URDF_PATH
+from .kinematics import _matmul, _translate, _rpy, _rot_axis
+from .urdf_loader import load_arm, _DEFAULT_URDF_PATH
 from logger import Logger
 
 # Box faces are always emitted in this order; index i -> label (i+1).
@@ -44,6 +54,33 @@ CYLINDER_COLOR = "#9e9e9e"
 # ---------------------------------------------------------------------------
 def _triplet(text, default=(0.0, 0.0, 0.0)):
     return tuple(float(v) for v in text.split()) if text else default
+
+
+_stl_bbox_cache = {}
+
+
+def _stl_local_bbox(path):
+    """Return (size_xyz, center_xyz) of a binary STL file's own local
+    vertex data (whatever units it was exported in — mm for this project).
+    Cached by path since several links reuse the same mesh file."""
+    if path in _stl_bbox_cache:
+        return _stl_bbox_cache[path]
+    lo = [float("inf")] * 3
+    hi = [float("-inf")] * 3
+    with open(path, "rb") as f:
+        f.read(80)  # header
+        (n,) = struct.unpack("<I", f.read(4))
+        for _ in range(n):
+            f.read(12)  # facet normal
+            for _ in range(3):
+                x, y, z = struct.unpack("<fff", f.read(12))
+                lo[0], lo[1], lo[2] = min(lo[0], x), min(lo[1], y), min(lo[2], z)
+                hi[0], hi[1], hi[2] = max(hi[0], x), max(hi[1], y), max(hi[2], z)
+            f.read(2)  # attribute byte count
+    size = tuple(hi[i] - lo[i] for i in range(3))
+    center = tuple((hi[i] + lo[i]) / 2 for i in range(3))
+    _stl_bbox_cache[path] = (size, center)
+    return size, center
 
 
 def _apply(T, p):
@@ -134,13 +171,22 @@ def parse_urdf(path):
         oxyz = _triplet(origin.get("xyz") if origin is not None else None)
         orpy = _triplet(origin.get("rpy") if origin is not None else None)
         geom = vis.find("geometry")
-        box, cyl = geom.find("box"), geom.find("cylinder")
+        box, cyl, mesh = geom.find("box"), geom.find("cylinder"), geom.find("mesh")
         if box is not None:
             visuals[lk.get("name")] = ("box", _triplet(box.get("size")), oxyz, orpy)
         elif cyl is not None:
             visuals[lk.get("name")] = ("cylinder",
                                        (float(cyl.get("radius")), float(cyl.get("length"))),
                                        oxyz, orpy)
+        elif mesh is not None:
+            # Bounding-box approximation, not the real mesh — see module docstring.
+            mesh_path = os.path.join(os.path.dirname(path), mesh.get("filename"))
+            scale = _triplet(mesh.get("scale"), (1.0, 1.0, 1.0))
+            size, center = _stl_local_bbox(mesh_path)
+            box_size = tuple(size[i] * scale[i] for i in range(3))
+            box_center = tuple(center[i] * scale[i] for i in range(3))
+            visuals[lk.get("name")] = ("box", box_size,
+                                       tuple(oxyz[i] + box_center[i] for i in range(3)), orpy)
     return root_link, chain, visuals
 
 
