@@ -21,6 +21,7 @@ import math
 from kinematics.simulate import draw_points
 from logger import Logger
 from perception.camera_geometry import camera_frame as _camera_frame
+from perception.camera_geometry import clamp_xy as _clamp_xy
 
 
 class Hand:
@@ -330,5 +331,9 @@ class HandFollower:
 
         # target에서 forward_axis 방향으로 new_forward_dist만큼 물러난 지점 —
         # 좌우/상하 성분은 target과 완전히 일치(화면 정중앙으로 재정렬)하고,
-        # 깊이 성분만 new_forward_dist로 대체된다.
-        return tuple(target[i] - new_forward_dist * forward_axis[i] for i in range(3))
+        # 깊이 성분만 new_forward_dist로 대체된다. x, y는 FaceFollower와 같은
+        # 이유로 clamp_xy(perception.camera_geometry)로 |x|, |y| <=
+        # IK_XY_LIMIT_M로 제한한다 — 팔이 베이스 회전축에서 너무 옆으로
+        # 벗어나지 않게 하는 안전판.
+        result = tuple(target[i] - new_forward_dist * forward_axis[i] for i in range(3))
+        return _clamp_xy(result)

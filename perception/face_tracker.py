@@ -4,12 +4,16 @@ perception.hand_tracker와 같은 구조: `FaceTracker`(인식 + 좌표변환 + 
 `FaceFollower`(얼굴 위치를 따라 로봇이 이동할 목표 계산)로 나뉘고, 카메라
 지오메트리(camera_frame)도 perception.camera_geometry를 그대로 공유한다.
 
-HandFollower와 다른 점: 거리에 따라 두 가지 추종 방식을 쓴다.
-- 가까움(NEAR_DISTANCE_M 미만): HandFollower와 같은 방식 — 화면 중앙 오프셋이
-  threshold를 넘으면 좌우/상하는 완전히 재정렬하고 깊이는 일부만 보정.
-- 멀리(NEAR_DISTANCE_M 이상, 책상에 앉아 있을 때의 일반적인 거리): 팔 전체를
-  움직이는 대신 HOME_POSITION으로 IK를 풀어 둔 자세를 유지한 채 1번 관절
-  (yaw, 베이스 회전)만 화면 좌우 오프셋에 비례해 돌려서 얼굴을 향하게 한다.
+HandFollower와 다른 점: 화면 중앙 정렬을 좌우/상하 축을 분리해서 처리한다.
+- 좌우(화면 가로 오프셋): 팔을 옆으로 이동시키는 대신 1번 관절(yaw, 베이스
+  회전)을 오프셋에 비례해 돌려서 얼굴을 향하게 한다.
+- 상하(화면 세로 오프셋): 얼굴이 화면 위쪽에 있으면 팔 높이(z)를 올리고,
+  아래쪽에 있으면 내려서 중앙에 오게 한다.
+
+IK 타겟은 항상 x=y=0 근방만 쓴다(perception.camera_geometry.clamp_xy로
+|x|, |y| <= IK_XY_LIMIT_M 유지) — 좌우 정렬을 x/y 이동이 아니라 yaw 회전으로
+흡수하기 때문에, 팔은 베이스 회전축 위에서 회전 + 높이 변화 위주로만
+움직인다(IDLE_POSITION이 x=y=0인 것과 같은 이유).
 
 실제 하드웨어 이동 명령은 이 모듈이 하지 않는다 — perception 패키지는
 하드웨어에 의존하지 않으므로, `FaceFollower`는 "어디로, 언제, 어떻게(3D 위치
@@ -24,7 +28,7 @@ import math
 from kinematics.simulate import draw_points
 from kinematics.urdf_loader import load_arm
 from logger import Logger
-from perception.camera_geometry import camera_frame
+from perception.camera_geometry import camera_frame, clamp_xy
 
 
 class Face:
@@ -58,8 +62,8 @@ class FaceTracker:
     # 얼굴 중심으로 쓰는 랜드마크 — FaceMesh 표준 index, 코끝 근처.
     CENTER_LANDMARK = 1
 
-    def __init__(self, max_num_faces=1, min_detection_confidence=0.5,
-                 min_tracking_confidence=0.5):
+    def __init__(self, max_num_faces=1, min_detection_confidence=0.6,
+                 min_tracking_confidence=0.6):
         """mediapipe FaceMesh 세션을 만든다. mediapipe import에 실패하면
         조용히 비활성 상태(`available == False`)로 남는다."""
         self.face_mesh = None
@@ -175,51 +179,47 @@ class FaceTracker:
 class FaceFollower:
     """얼굴 위치를 따라 로봇이 이동할 다음 명령을 계산하는 상태 객체.
 
-    거리에 따라 두 가지 추종 방식을 쓴다:
-    - NEAR_DISTANCE_M 미만(가까움): HandFollower와 같은 방식 — 화면 중앙
-      오프셋이 CENTER_OFFSET_THRESHOLD를 넘으면 좌우/상하는 완전히
-      재정렬하고, 깊이는 FOLLOW_DISTANCE_M과의 오차 중 DEPTH_FOLLOW_GAIN
-      비율만큼만 보정한 3D 목표 위치를 낸다 → 호출부가 goto_position(IK)로
-      이동시킨다.
-    - NEAR_DISTANCE_M 이상(보통 사용 거리): 팔 전체를 움직이지 않는다.
-      HOME_POSITION에 대해 IK를 풀어 둔 자세(관절 2~5)는 그대로 두고, 1번
-      관절(yaw)만 화면 좌우 오프셋(screen_offset[0])에 비례해 현재 각도에서
-      더 돌려 얼굴을 향하게 한다 → 호출부가 goto_joints(직접 관절 제어)로
-      이동시킨다. 1번 관절의 회전 방향(yaw_gain의 부호)은 실측으로 확인된
+    화면 중앙 정렬을 좌우/상하 축으로 분리해서 처리한다:
+    - 좌우(screen_offset[0]): 1번 관절(yaw)을 오프셋에 비례해 현재 각도에서
+      더 돌려 얼굴을 향하게 한다. 회전 방향(yaw_gain의 부호)은 실측으로 확인된
       값이 아니므로, 실제로 반대로 도는 것 같으면 yaw_gain 부호만 뒤집으면
       된다.
+    - 상하(screen_offset[1]): 얼굴이 화면 위쪽에 있으면(offset 음수) 팔
+      높이(z)를 올리고, 아래쪽에 있으면(offset 양수) 내린다.
+
+    IK에 넘기는 목표 위치는 항상 x=y=0(perception.camera_geometry.clamp_xy로
+    |x|, |y| <= IK_XY_LIMIT_M 유지)만 쓴다 — 좌우 정렬을 x/y 이동이 아니라
+    yaw 회전으로 흡수하므로, 팔은 베이스 회전축 위에서 회전 + 높이 변화 위주로만
+    움직인다.
 
     실제 이동(IK 계산 + 서보 명령)은 하지 않는다 — `next_command()`가 돌려준
     (kind, payload)를 호출부가 `hardware.actuator.ArmController`의
-    `goto_position`/`goto_joints`에 넘겨야 로봇이 실제로 움직인다.
+    `goto_joints`에 넘겨야 로봇이 실제로 움직인다.
     """
 
-    FOLLOW_DISTANCE_M = 0.3
-    NEAR_DISTANCE_M = 0.4
     CENTER_OFFSET_THRESHOLD = 0.15
-    DEPTH_FOLLOW_GAIN = 0.3
-    HOME_POSITION = (0.0, 0.0, 0.3)
     # 화면 좌우 오프셋(대략 -0.5~0.5)을 1번 관절 각도 보정량(rad)으로 바꾸는
     # 비례 이득 — 실측으로 튜닝 필요.
     YAW_GAIN = 0.8
     # 한 번의 갱신에서 1번 관절이 움직일 수 있는 최대 각도(rad) — 큰 오프셋이
     # 갑자기 튀어도 로봇이 한 번에 확 돌지 않도록 하는 안전판.
     YAW_STEP_LIMIT = math.radians(20)
+    # 화면 상하 오프셋(대략 -0.5~0.5)을 높이(z) 보정량(m)으로 바꾸는 비례
+    # 이득 — 실측으로 튜닝 필요.
+    HEIGHT_GAIN = 0.2
+    # 한 번의 갱신에서 높이(z)가 움직일 수 있는 최대 거리(m) — YAW_STEP_LIMIT과
+    # 같은 이유의 안전판.
+    HEIGHT_STEP_LIMIT = 0.03
 
-    def __init__(self, arm=None, follow_distance=FOLLOW_DISTANCE_M,
-                 near_distance=NEAR_DISTANCE_M,
-                 center_offset_threshold=CENTER_OFFSET_THRESHOLD,
-                 depth_follow_gain=DEPTH_FOLLOW_GAIN,
-                 home_position=HOME_POSITION, yaw_gain=YAW_GAIN,
-                 yaw_step_limit=YAW_STEP_LIMIT):
+    def __init__(self, arm=None, center_offset_threshold=CENTER_OFFSET_THRESHOLD,
+                 yaw_gain=YAW_GAIN, yaw_step_limit=YAW_STEP_LIMIT,
+                 height_gain=HEIGHT_GAIN, height_step_limit=HEIGHT_STEP_LIMIT):
         self.arm = arm if arm is not None else load_arm()
-        self.follow_distance = follow_distance
-        self.near_distance = near_distance
         self.center_offset_threshold = center_offset_threshold
-        self.depth_follow_gain = depth_follow_gain
-        self.home_position = home_position
         self.yaw_gain = yaw_gain
         self.yaw_step_limit = yaw_step_limit
+        self.height_gain = height_gain
+        self.height_step_limit = height_step_limit
         self._yaw_index = self.arm.id_to_index[1]
 
     @staticmethod
@@ -232,9 +232,8 @@ class FaceFollower:
         """다음에 실행할 명령을 (kind, payload) 튜플로 반환하거나, 할 일이
         없으면(얼굴 없음/데드존 안) None을 반환한다.
 
-        kind="position": payload는 (x, y, z) — goto_position(IK)로 이동.
-        kind="joints"  : payload는 servo_deg 리스트 — goto_joints로 이동.
-        current_q: 현재 관절각(rad) 리스트 — 원거리일 때 1번 관절의 기준값.
+        kind="joints": payload는 servo_deg 리스트 — goto_joints로 이동.
+        current_q: 현재 관절각(rad) 리스트 — yaw/높이 보정의 기준값.
         """
         face = self.primary_face(faces)
         if face is None:
@@ -242,30 +241,22 @@ class FaceFollower:
         if math.hypot(*face.screen_offset) < self.center_offset_threshold:
             return None
 
-        if face.depth < self.near_distance:
-            return "position", self._near_target(face, T_ee)
-        return "joints", self._far_yaw_command(face, current_q)
+        return "joints", self._track_command(face, T_ee, current_q)
 
-    def _near_target(self, face, T_ee):
-        """가까울 때: 좌우/상하는 화면 정중앙으로 완전히, 깊이는 일부만 보정."""
-        forward_axis, _, _, origin = camera_frame(T_ee)
-        rel = tuple(face.center[i] - origin[i] for i in range(3))
-        forward_dist = sum(rel[i] * forward_axis[i] for i in range(3))
+    def _track_command(self, face, T_ee, current_q):
+        """좌우는 yaw 회전, 상하는 높이(z) 이동으로 화면 중앙에 맞춘다."""
+        offset_x, offset_y = face.screen_offset
 
-        depth_error = forward_dist - self.follow_distance
-        new_forward_dist = forward_dist - self.depth_follow_gain * depth_error
+        current_z = T_ee[2][3]
+        z_step = self.height_gain * -offset_y
+        z_step = max(-self.height_step_limit, min(self.height_step_limit, z_step))
+        target = clamp_xy((0.0, 0.0, current_z + z_step))
 
-        return tuple(face.center[i] - new_forward_dist * forward_axis[i] for i in range(3))
+        q_target, converged = self.arm.ik(target, seed=current_q)
+        q = list(q_target) if converged else list(current_q)
 
-    def _far_yaw_command(self, face, current_q):
-        """멀 때: HOME_POSITION의 IK 자세를 유지한 채 1번 관절만 조정."""
-        q_home, converged = self.arm.ik(self.home_position)
-        q = list(q_home) if converged else (list(current_q) if current_q is not None
-                                             else [0.0] * len(self.arm.joints))
-
-        current_yaw = current_q[self._yaw_index] if current_q is not None else q[self._yaw_index]
-        step = self.yaw_gain * face.screen_offset[0]
-        step = max(-self.yaw_step_limit, min(self.yaw_step_limit, step))
-        q[self._yaw_index] = current_yaw + step
+        yaw_step = self.yaw_gain * offset_x
+        yaw_step = max(-self.yaw_step_limit, min(self.yaw_step_limit, yaw_step))
+        q[self._yaw_index] = current_q[self._yaw_index] + yaw_step
 
         return self.arm.q_to_servo_deg(q)

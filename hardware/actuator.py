@@ -19,11 +19,25 @@ class Actuator:
 
         Logger.log("ACTUATOR", f"ID {self.id} initialized (model={model})")
         self.controller.set_speed(self.id, self.__MIN_SPEED, self.control_table)
+        self._last_speed = self.__MIN_SPEED
 
     def goto(self, degree: float, speed: float = 5):
         Logger.log("ACTUATOR", f"ID {self.id} goto degree={degree} speed={speed}")
-        self.controller.set_speed(self.id, speed, self.control_table)
-        time.sleep(self.__TIME_INTERVAL)
+        # Moving_Speed is only re-written when it actually changes. Every
+        # caller in this codebase drives with the same default speed, so
+        # without this check goto() was writing Moving_Speed on every single
+        # call (one extra TxRx round trip per joint, plus a mandatory 25ms
+        # settle sleep) purely to rewrite the value already sitting in the
+        # register — doubling serial traffic per move and, when a follower
+        # commands a new position on every processed camera frame, adding up
+        # to a blocking delay per frame large enough to stall the display
+        # loop. Skipping the redundant write also means one less chance for
+        # a corrupted packet to land a bad value in Moving_Speed (this
+        # hardware does intermittently report bad status packets).
+        if speed != self._last_speed:
+            self.controller.set_speed(self.id, speed, self.control_table)
+            self._last_speed = speed
+            time.sleep(self.__TIME_INTERVAL)
         self.controller.set_goal_position(self.id, degree, self.control_table)
 
     def get_position(self):
