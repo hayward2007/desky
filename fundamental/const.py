@@ -596,24 +596,6 @@ class GestureConst:
 
 
 # =============================================================================
-# perception/document_scanner.py
-# =============================================================================
-class DocumentScannerConst:
-    """perception.document_scanner.DocumentScanner가 쓰는 상수(튜닝 파라미터).
-
-    DocumentScanner(**overrides)로 개별 값을 덮어쓸 수 있다 — 예:
-    DocumentScanner(MIN_AREA_RATIO=0.01).
-    """
-
-    PROC_HEIGHT = 500.0      # 검출용으로 축소할 높이. 결과 좌표는 원본 크기로 되돌린다
-    CANNY_LO = 75            # Canny 하한 임계값 (사진이 흐릿하면 낮춘다)
-    CANNY_HI = 200           # Canny 상한 임계값
-    MIN_AREA_RATIO = 0.04    # 문서로 인정할 최소 면적(화면의 4%). 작은 문서를 잡으려면 낮춘다
-    RECT_MIN = 0.60          # 사각형성(윤곽 면적 / 최소회전사각형 면적) 하한. 손·불규칙 형태 제거용
-    DEDUP_DIST_RATIO = 0.05  # 두 사각형 중심이 화면 대각선의 이 비율보다 가까우면 같은 문서로 본다
-
-
-# =============================================================================
 # src/api/camera.py
 # =============================================================================
 class CameraConst:

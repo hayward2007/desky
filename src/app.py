@@ -7,7 +7,7 @@
     ArmAPI          팔 제어 HTTP 라우트                            (src/api/arm.py)
     Camera          /ws/camera 양방향 소켓(프레임·음성·랜드마크·명령) (src/api/camera.py)
     Gemini          채팅/요약/STT/문서 읽기                        (src/api/gemini.py)
-    ScanAPI         문서 검출·선택·읽기 라우트                     (src/api/scan.py)
+    ScanAPI         라이브 프레임을 Gemini로 읽는 스캔 라우트       (src/api/scan.py)
     Calendar        일정 저장소 + 라우트                           (src/api/calendar.py)
     Light           라즈베리파이 조명 스위치 프록시                (src/api/light.py)
     GestureBridge   가위바위보 → 폰 명령/조명                      (src/gesture_bridge.py)
@@ -42,7 +42,6 @@ from flask_sock import Sock
 
 from fundamental.const import AppConst
 from fundamental.logger import Logger
-from perception.document_scanner import DocumentScanner
 from src.api.arm import ArmAPI
 from src.api.calendar import Calendar
 from src.api.camera import Camera
@@ -106,9 +105,8 @@ class DeskyApp:
         # 폰과의 양방향 소켓(프레임·음성·손 랜드마크 ↔ transcript·제스처 명령).
         self.camera = Camera(self.gemini)
 
-        # 문서 스캔 = 검출(OpenCV) + 읽기(Gemini).
-        self.scanner = DocumentScanner()
-        self.scan_api = ScanAPI(self.camera, self.scanner, self.gemini)
+        # 문서 스캔 — 라이브 프레임을 통째로 Gemini에 보내 읽는다.
+        self.scan_api = ScanAPI(self.camera, self.gemini)
 
         # 웹 기능 계열.
         self.calendar = Calendar()
