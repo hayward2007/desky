@@ -3,27 +3,129 @@
 <head>
   <meta charset="utf-8">
   <title>desky arm control</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='theme.css') }}">
   <style>
-    body { font-family: system-ui, sans-serif; max-width: 720px; margin: 2rem auto; padding: 0 1rem; color: #222; }
-    h1 { font-size: 1.4rem; }
-    section { border: 1px solid #ddd; border-radius: 8px; padding: 1rem; margin-bottom: 1.5rem; }
-    section h2 { margin-top: 0; font-size: 1.1rem; }
-    button { padding: 0.4rem 1rem; cursor: pointer; }
-    input[type="number"] { width: 5.5rem; padding: 0.25rem; }
-    .slider-row { display: flex; align-items: center; gap: 0.75rem; margin-bottom: 0.4rem; }
-    .slider-row label { width: 5.5rem; font-family: monospace; }
-    .slider-row input[type="range"] { flex: 1; }
-    .slider-row .val { width: 4rem; text-align: right; font-family: monospace; }
-    .ik-row { display: flex; align-items: center; gap: 0.5rem; margin: 0.75rem 0; flex-wrap: wrap; }
-    #sim-view { width: 100%; border-radius: 8px; background: #f4f4f4; display: block; margin-bottom: 0.75rem; }
-    #status, #fk-result, #ik-result, #move-result { font-family: monospace; white-space: pre-wrap; margin-top: 0.5rem; }
-    .error { color: #b00020; }
-    .banner { padding: 0.75rem 1rem; border-radius: 8px; margin-bottom: 1.5rem; background: #fff3cd; color: #7a5b00; border: 1px solid #f0d999; }
-    .muted { color: #666; margin-top: 0; }
+    /* PC 대시보드 — 폰 화면(/mobile)과 같은 팔레트를 쓰되, 이쪽은 값을 읽고
+       숫자를 넣는 정비용 도구다. 그래서 장식을 줄이고 숫자는 전부 고정폭으로.
+       색·버튼 등 공통 요소는 static/theme.css. */
+    body {
+      max-width: 760px;
+      margin: 0 auto;
+      padding: 32px 20px 56px;
+      height: auto;
+    }
+    h1 {
+      font-size: 20px; font-weight: 700; letter-spacing: -.02em;
+      margin: 0 0 20px;
+    }
+    h1 span { color: var(--signal); }
+
+    section {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: var(--r-panel);
+      padding: 18px 20px;
+      margin-bottom: 16px;
+    }
+    section h2 {
+      font-family: var(--mono);
+      font-size: 10px; font-weight: 600;
+      letter-spacing: .14em; text-transform: uppercase;
+      color: var(--dim);
+      margin: 0 0 14px;
+    }
+
+    button {
+      appearance: none;
+      border: 0; border-radius: 10px;
+      background: var(--graphite); color: #fff;
+      font-family: var(--sans); font-size: 13px; font-weight: 600;
+      padding: 9px 16px; cursor: pointer;
+      transition: filter .12s ease;
+    }
+    button:hover { filter: brightness(1.18); }
+    button:disabled { background: #C3C6CC; cursor: not-allowed; filter: none; }
+    button.go { background: var(--signal); }
+
+    input[type="number"] {
+      width: 6rem; padding: 6px 8px;
+      border: 1px solid var(--line); border-radius: 8px;
+      font-family: var(--mono); font-size: 13px;
+      color: var(--ink); background: var(--panel);
+    }
+    input[type="number"]:focus { border-color: var(--signal); outline: none; }
+
+    /* 관절 슬라이더 한 줄 */
+    .slider-row { display: flex; align-items: center; gap: 12px; margin-bottom: 8px; }
+    .slider-row label {
+      width: 5rem; font-family: var(--mono); font-size: 11px;
+      font-weight: 600; color: var(--dim);
+    }
+    .slider-row input[type="range"] { flex: 1; accent-color: var(--signal); }
+    .slider-row .val {
+      width: 4.5rem; text-align: right;
+      font-family: var(--mono); font-variant-numeric: tabular-nums;
+      font-size: 12px; font-weight: 600;
+    }
+
+    .ik-row { display: flex; align-items: center; gap: 10px; margin: 12px 0; flex-wrap: wrap; }
+    .ik-row label { font-family: var(--mono); font-size: 11px; color: var(--dim); }
+
+    /* 미리보기 이미지 — 영상/렌더가 오기 전 바탕은 인디고(살아 있는 면) */
+    #sim-view, #camera-feed {
+      width: 100%; display: block;
+      border-radius: var(--r-card);
+      background: var(--signal-wash);
+      margin-bottom: 10px;
+    }
+    #camera-feed { background: var(--signal); }
+
+    #status, #fk-result, #ik-result, #move-result, #camera-status {
+      font-family: var(--mono); font-variant-numeric: tabular-nums;
+      font-size: 12px; line-height: 1.6;
+      white-space: pre-wrap; margin-top: 8px; color: var(--graphite-dp);
+    }
+    .error { color: var(--alert); }
+
+    .banner {
+      background: var(--alert-wash); color: var(--alert);
+      border: 1px solid rgba(192, 80, 63, .25);
+      border-radius: var(--r-card);
+      padding: 10px 14px; margin-bottom: 16px;
+      font-size: 13px; line-height: 1.55;
+    }
+    .muted { color: var(--dim); margin-top: 0; font-size: 13px; line-height: 1.6; }
+
+    /* 주소 안내 — 폰으로 옮겨 적어야 하는 값이라 가장 크고 또렷하게 */
+    .net-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+    #mobile-url {
+      flex: 1; min-width: 0;
+      font-family: var(--mono); font-size: 17px; font-weight: 500;
+      color: var(--signal-dp); background: var(--signal-wash);
+      border-radius: 8px; padding: 10px 12px;
+      word-break: break-all;
+    }
+    #net-card.warn #mobile-url { color: var(--alert); background: var(--alert-wash); }
+    code {
+      font-family: var(--mono); font-size: .92em;
+      background: var(--paper); border-radius: 4px; padding: 1px 5px;
+    }
   </style>
 </head>
 <body>
-  <h1>desky arm control</h1>
+  <h1>desky<span>.</span> arm control</h1>
+
+  <section id="net-card">
+    <h2>같은 공유기의 다른 기기에서 열기</h2>
+    <p class="muted" style="margin-bottom:10px;">
+      팔에 장착한 폰에서 아래 주소를 여세요. 인증서 경고가 뜨면 고급 → 계속으로 진행하면 됩니다.
+    </p>
+    <div class="net-row">
+      <code id="mobile-url">주소를 찾는 중…</code>
+      <button id="copy-url" type="button">복사</button>
+    </div>
+    <div id="net-alt" class="muted" style="margin-top:8px; font-size:12px;"></div>
+  </section>
 
   {% if not hardware_connected %}
   <div class="banner">
@@ -41,15 +143,29 @@
     <h2>Simulation &amp; control</h2>
     <img id="sim-view" alt="3D preview">
 
-    <p class="muted">FK — drag a joint slider (servo degrees, 30–330°). The preview and end-effector position update live.</p>
+    <p class="muted">FK — drag a joint slider (servo degrees). Range shown is each joint's
+      self-collision-safe limit (from the URDF), not just the servo's 0–300° physical travel.
+      The preview and end-effector position update live.</p>
     {% for joint_id in joint_ids %}
+    {% set lo = joint_ranges[joint_id][0] %}
+    {% set hi = joint_ranges[joint_id][1] %}
+    {% set home = joint_ranges[joint_id][2] %}
     <div class="slider-row">
-      <label for="joint-{{ joint_id }}">id {{ joint_id }}</label>
-      <input type="range" id="joint-{{ joint_id }}" min="30" max="330" step="1" value="180"
-             oninput="onSlider({{ joint_id }})">
-      <span class="val" id="joint-val-{{ joint_id }}">180°</span>
+      <label for="joint-{{ joint_id }}"
+             {% if joint_id in coupled_joints %}
+             title="joint{{ joint_id }}'s safe range narrows/widens depending on joint{{ coupled_joints[joint_id] }}'s current angle — this slider's [{{ '%.0f'|format(lo) }}, {{ '%.0f'|format(hi) }}] is the conservative bound that's always safe."
+             {% endif %}>id {{ joint_id }}{{ "*" if joint_id in coupled_joints }}</label>
+      <input type="range" id="joint-{{ joint_id }}" min="{{ '%.1f'|format(lo) }}" max="{{ '%.1f'|format(hi) }}"
+             step="0.5" value="{{ '%.1f'|format(home) }}" oninput="onSlider({{ joint_id }})">
+      <span class="val" id="joint-val-{{ joint_id }}">{{ '%.0f'|format(home) }}°</span>
     </div>
     {% endfor %}
+    {% if coupled_joints %}
+    <p class="muted" style="font-size: 12px;">* joint{{ coupled_joints.keys() | list | join(", joint") }}'s
+      slider range is the conservative bound valid no matter what its coupled joint is doing;
+      the server re-checks the live, coupling-aware range on every move and may reject a value
+      inside this slider's range if the other joint has since moved.</p>
+    {% endif %}
     <div id="fk-result"></div>
 
     <p class="muted" style="margin-top:1rem;">IK — enter a target position; the sliders snap to the solution (nothing moves yet).</p>
@@ -57,7 +173,7 @@
       <label>x <input type="number" id="x" step="0.001" value="0.0"></label>
       <label>y <input type="number" id="y" step="0.001" value="0.0"></label>
       <label>z <input type="number" id="z" step="0.001" value="0.3"></label>
-      <button onclick="solveIk()">Solve IK</button>
+      <button class="go" onclick="solveIk()">Solve IK</button>
     </div>
     <div id="ik-result"></div>
 
@@ -70,12 +186,49 @@
   <section>
     <h2>Mobile camera feed</h2>
     <p>Open <code>/mobile</code> on the phone mounted on the arm to start streaming.</p>
-    <img id="camera-feed" alt="waiting for camera frames..." style="width: 100%; border-radius: 8px; background: #eee; display: block;">
+    <img id="camera-feed" alt="waiting for camera frames...">
     <div id="camera-status">no frames received yet</div>
   </section>
 
   <script>
     const JOINT_IDS = {{ joint_ids | tojson }};
+
+    /* 폰에서 입력할 주소를 서버에서 받아 화면에 띄운다. 서버는 0.0.0.0(모든
+       랜카드)에 열려 있어 같은 공유기의 기기는 이미 접속할 수 있는데, 정작
+       그 주소를 사람이 알 방법이 없어서 여기에 표시한다. */
+    async function loadNetworkInfo() {
+      const urlEl = document.getElementById("mobile-url");
+      const altEl = document.getElementById("net-alt");
+      try {
+        const info = await (await fetch("/api/network")).json();
+        if (!info.mobile_url) {
+          document.getElementById("net-card").classList.add("warn");
+          urlEl.textContent = "이 PC가 네트워크에 붙어 있지 않습니다";
+          return;
+        }
+        urlEl.textContent = info.mobile_url;
+        /* 랜카드가 여러 개면(유선+무선, VPN, 가상 어댑터) 첫 주소가 폰과 같은
+           공유기가 아닐 수 있으므로 나머지도 함께 보여준다. */
+        if (info.urls.length > 1) {
+          altEl.textContent = "안 되면 이 주소들도 시도해 보세요 — "
+            + info.urls.slice(1).map((u) => u + "/mobile").join(" , ");
+        }
+      } catch (e) {
+        urlEl.textContent = "주소를 가져오지 못했습니다";
+      }
+    }
+
+    document.getElementById("copy-url").addEventListener("click", async () => {
+      const text = document.getElementById("mobile-url").textContent;
+      try {
+        await navigator.clipboard.writeText(text);
+        const btn = document.getElementById("copy-url");
+        btn.textContent = "복사됨";
+        setTimeout(() => { btn.textContent = "복사"; }, 1500);
+      } catch (e) { /* 클립보드 권한이 없으면 사용자가 직접 선택해 복사하면 된다 */ }
+    });
+
+    loadNetworkInfo();
 
     function degrees() {
       return JOINT_IDS.map((id) => parseFloat(document.getElementById("joint-" + id).value));
@@ -116,8 +269,14 @@
       const data = await res.json();
       if (!res.ok || data.error) { el.textContent = "error: " + (data.error || res.status); el.className = "error"; return; }
       const p = data.position;
-      el.className = "";
-      el.textContent = `end-effector: x=${p[0].toFixed(4)} y=${p[1].toFixed(4)} z=${p[2].toFixed(4)} m`;
+      if (data.within_limits) {
+        el.className = "";
+        el.textContent = `end-effector: x=${p[0].toFixed(4)} y=${p[1].toFixed(4)} z=${p[2].toFixed(4)} m`;
+      } else {
+        el.className = "error";
+        el.textContent = `end-effector: x=${p[0].toFixed(4)} y=${p[1].toFixed(4)} z=${p[2].toFixed(4)} m ` +
+          `— ⚠ outside self-collision-safe range, "Move actuators" will reject this pose`;
+      }
     }
 
     function refreshPose() {

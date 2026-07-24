@@ -24,20 +24,21 @@ you have the real numbers. FK/IK adapt automatically to whatever you set.
 
 import math
 
-from logger import Logger
+from fundamental.const import KinematicsConst, ArmConst
+from fundamental.logger import Logger
 
 # ---------------------------------------------------------------------------
 # Link geometry — PLACEHOLDERS. Replace with measured values (any consistent
 # length unit; mm assumed). Each offset is the translation from the previous
 # joint's frame to this joint's origin, expressed in the previous frame BEFORE
-# this joint rotates.
+# this joint rotates. Actual values live in fundamental.const.KinematicsConst.
 # ---------------------------------------------------------------------------
-BASE_HEIGHT_MM = 50.0   # base bottom -> yaw joint (along Z)
-RISER_MM       = 30.0   # yaw joint  -> roll joint (along Z)
-SHOULDER_MM    = 40.0   # roll joint -> first pitch joint (id3), along Z
-UPPER_ARM_MM   = 120.0  # id3 -> id4, along local X
-FOREARM_MM     = 100.0  # id4 -> id5, along local X
-TOOL_MM        = 80.0   # id5 -> phone mount (end-effector), along local X
+BASE_HEIGHT_MM = KinematicsConst.BASE_HEIGHT_MM   # base bottom -> yaw joint (along Z)
+RISER_MM       = KinematicsConst.RISER_MM         # yaw joint  -> roll joint (along Z)
+SHOULDER_MM    = KinematicsConst.SHOULDER_MM      # roll joint -> first pitch joint (id3), along Z
+UPPER_ARM_MM   = KinematicsConst.UPPER_ARM_MM     # id3 -> id4, along local X
+FOREARM_MM     = KinematicsConst.FOREARM_MM       # id4 -> id5, along local X
+TOOL_MM        = KinematicsConst.TOOL_MM          # id5 -> phone mount (end-effector), along local X
 
 
 # ---------------------------------------------------------------------------
@@ -124,9 +125,9 @@ def _inverse(M):
 # Joint model
 # ---------------------------------------------------------------------------
 # Axis unit vectors for the three joint roles (URDF <axis xyz="..."/> convention).
-YAW = (0.0, 0.0, 1.0)    # about Z
-ROLL = (1.0, 0.0, 0.0)   # about X
-PITCH = (0.0, 1.0, 0.0)  # about Y
+YAW = KinematicsConst.YAW      # about Z
+ROLL = KinematicsConst.ROLL    # about X
+PITCH = KinematicsConst.PITCH  # about Y
 
 
 class Joint:
@@ -137,13 +138,25 @@ class Joint:
     rpy       : (roll, pitch, yaw) fixed origin rotation (URDF origin rpy)
     home_deg  : servo angle in [0, 300] that corresponds to joint angle q = 0
     direction : +1 or -1; servo_deg = home_deg + direction * degrees(q)
-    q_min/q_max : joint limits in radians (relative to home)
+    q_min/q_max : static joint limits in radians (relative to home) — for a
+                  coupled joint (see below) this is the conservative bound
+                  that holds regardless of the other joint's angle.
     name      : URDF joint name (for reference)
+
+    coupled_with/coupled_table: some joints' *actual* self-collision-free
+    range depends on a neighboring joint's current angle (e.g. this arm's
+    joint2/joint3 overlap in a way a single static range can't capture
+    without being needlessly conservative). When set, coupled_with is the
+    other joint's `id` and coupled_table is a list of
+    (q_other, lower, upper) points sorted by q_other, linearly interpolated
+    by `bounds()`/`clamp()` when the other joint's current angle is known —
+    see kinematics/find_joint_limits.py, which generates this table.
     """
 
     def __init__(self, id, axis, offset, rpy=(0.0, 0.0, 0.0),
                  home_deg=150.0, direction=1,
-                 q_min=-math.pi / 2, q_max=math.pi / 2, name=None):
+                 q_min=-math.pi / 2, q_max=math.pi / 2, name=None,
+                 coupled_with=None, coupled_table=None):
         self.id = id
         self.axis = axis
         self.offset = offset
@@ -153,6 +166,8 @@ class Joint:
         self.q_min = q_min
         self.q_max = q_max
         self.name = name
+        self.coupled_with = coupled_with
+        self.coupled_table = coupled_table
 
     # --- conversions between joint angle q (rad) and servo angle (deg, 0..300) ---
     def servo_deg(self, q):
@@ -161,8 +176,27 @@ class Joint:
     def q_from_servo(self, servo_deg):
         return self.direction * math.radians(servo_deg - self.home_deg)
 
-    def clamp(self, q):
-        return max(self.q_min, min(self.q_max, q))
+    def bounds(self, q_other=None):
+        """Effective (q_min, q_max) — interpolated from coupled_table against
+        q_other when this joint is coupled and q_other is given, else the
+        static (q_min, q_max)."""
+        if self.coupled_table is None or q_other is None:
+            return self.q_min, self.q_max
+
+        table = self.coupled_table
+        if q_other <= table[0][0]:
+            return table[0][1], table[0][2]
+        if q_other >= table[-1][0]:
+            return table[-1][1], table[-1][2]
+        for (qa, lo_a, hi_a), (qb, lo_b, hi_b) in zip(table, table[1:]):
+            if qa <= q_other <= qb:
+                t = (q_other - qa) / (qb - qa) if qb != qa else 0.0
+                return lo_a + t * (lo_b - lo_a), hi_a + t * (hi_b - hi_a)
+        return self.q_min, self.q_max  # unreachable if table is sorted
+
+    def clamp(self, q, q_other=None):
+        lo, hi = self.bounds(q_other)
+        return max(lo, min(hi, q))
 
 
 # Default chain matching id1=yaw, id2=roll, id3/4/5=pitch.
@@ -180,9 +214,22 @@ TOOL_OFFSET = (TOOL_MM, 0.0, 0.0)  # id5 frame -> phone mount
 class Arm:
     """5-DOF arm kinematics. `q` is always a list of 5 joint angles in radians."""
 
-    def __init__(self, joints=None, tool_offset=TOOL_OFFSET):
+    # Default per-joint IK weights, keyed by Joint.id. Higher = more "expensive"
+    # for the damped-least-squares solver to move, so redundancy (this 5-DOF
+    # arm has 2 null-space DOF against a 3-DOF position target) gets resolved
+    # by favoring the other joints instead. joint2 (roll) is weighted up
+    # because its self-collision-free range is narrow and depends on joint3's
+    # angle (see Joint.coupled_table) — preferring joint1 (yaw) to cover the
+    # same reach keeps joint2 away from its coupled limits more often.
+    DEFAULT_JOINT_WEIGHTS = ArmConst.DEFAULT_JOINT_WEIGHTS
+
+    def __init__(self, joints=None, tool_offset=TOOL_OFFSET, joint_weights=None):
         self.joints = joints if joints is not None else DEFAULT_JOINTS
         self.tool_offset = tool_offset
+        self.id_to_index = {j.id: i for i, j in enumerate(self.joints)}
+        if joint_weights is None:
+            joint_weights = [self.DEFAULT_JOINT_WEIGHTS.get(j.id, 1.0) for j in self.joints]
+        self.joint_weights = joint_weights
 
     # ---------------- Forward kinematics ----------------
     def _fk_frames(self, q):
@@ -216,7 +263,7 @@ class Arm:
 
     # ---------------- Inverse kinematics ----------------
     def ik(self, target_pos, target_rot=None, seed=None,
-           max_iter=200, tol=1e-3, damping=0.05):
+           max_iter=200, tol=1e-3, damping=0.05, joint_weights=None):
         """Solve joint angles that place the end-effector at target_pos.
 
         target_pos : (x, y, z) desired position.
@@ -224,13 +271,23 @@ class Arm:
                      orientation is included in the objective (best-effort, since
                      5 DOF cannot satisfy a full 6-DOF pose exactly).
         seed       : starting joint angles (radians); defaults to all-zero.
+        joint_weights : per-joint cost used to resolve the redundancy this
+                     5-DOF arm has against a 3-DOF position target (defaults
+                     to self.joint_weights, see Arm.DEFAULT_JOINT_WEIGHTS) —
+                     a joint weighted higher moves less, so the solver favors
+                     moving the other joints to reach the same target.
         Returns (q, converged): the joint angles and whether tol was reached.
 
-        Uses damped least squares:  dq = J^T (J J^T + λ² I)^-1  e
+        Uses weighted damped least squares:
+            dq = W⁻¹ Jᵀ (J W⁻¹ Jᵀ + λ² I)⁻¹ e
+        which reduces to the standard dq = Jᵀ(JJᵀ + λ²I)⁻¹e when every
+        weight is 1.
         """
         q = list(seed) if seed is not None else [0.0] * len(self.joints)
         n = len(self.joints)
         lam2 = damping * damping
+        weights = joint_weights if joint_weights is not None else self.joint_weights
+        w_inv = [1.0 / w for w in weights]
 
         for _ in range(max_iter):
             T = self.fk_matrix(q)
@@ -239,17 +296,22 @@ class Arm:
                 return q, True
 
             J = self._jacobian(q, use_rot=target_rot is not None)
-            # dq = J^T (J J^T + λ² I)^-1 e
-            JJt = _matmul(J, _transpose(J))
-            for i in range(len(JJt)):
-                JJt[i][i] += lam2
-            inv = _inverse(JJt)
-            Jt = _transpose(J)
-            tmp = [sum(inv[i][k] * e[k] for k in range(len(e))) for i in range(len(inv))]
-            dq = [sum(Jt[i][k] * tmp[k] for k in range(len(tmp))) for i in range(n)]
+            m = len(J)
+            # A = J W⁻¹ (scale each column j by w_inv[j]); J W⁻¹ Jᵀ = A Jᵀ
+            A = [[J[i][j] * w_inv[j] for j in range(n)] for i in range(m)]
+            AJt = _matmul(A, _transpose(J))
+            for i in range(len(AJt)):
+                AJt[i][i] += lam2
+            inv = _inverse(AJt)
+            z = [sum(inv[i][k] * e[k] for k in range(len(e))) for i in range(m)]
+            # dq = W⁻¹ Jᵀ z = Aᵀ z
+            dq = [sum(A[i][j] * z[i] for i in range(m)) for j in range(n)]
 
             for i in range(n):
-                q[i] = self.joints[i].clamp(q[i] + dq[i])
+                joint = self.joints[i]
+                q_other = q[self.id_to_index[joint.coupled_with]] \
+                    if joint.coupled_with is not None else None
+                q[i] = joint.clamp(q[i] + dq[i], q_other=q_other)
 
         T = self.fk_matrix(q)
         return q, _norm(self._pose_error(T, target_pos, target_rot)) < tol

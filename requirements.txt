@@ -1,0 +1,29 @@
+# --- 필수 (웹 대시보드 + 모바일 페이지) ---------------------------------
+flask                 # src.app: HTTP 서버
+flask-sock            # src.app: /ws/camera raw WebSocket (양방향: 프레임·음성·랜드마크 ↔ 명령)
+pyopenssl             # src.app: ssl_context="adhoc" 자체 서명 인증서 (getUserMedia에 HTTPS 필수)
+opencv-python         # perception/src.perception_loop: 프레임 디코드, 문서 검출, 미리보기 창
+numpy                 # opencv와 함께 사용
+matplotlib            # kinematics.simulate / src.render: 3D 렌더링 (웹 /api/render 포함)
+python-dotenv         # .env에서 DEVICE_NAME / GEMINI_API_KEY 로드
+requests              # src.api.light: 라즈베리파이 조명 서버 호출 (병합으로 추가)
+
+# --- 하드웨어 제어 (실제 서보를 움직일 때만) -----------------------------
+dynamixel-sdk         # hardware: DYNAMIXEL Protocol 1.0 통신
+
+# --- AI 기능 (없으면 해당 기능만 비활성) ---------------------------------
+google-genai          # src.api.gemini: 채팅/요약/STT/문서 글자 읽기
+# mediapipe(Python)는 더 이상 필요 없다 — 얼굴/손/몸(어깨, 얼굴 인식 실패
+# 폴백) 인식 전부 휴대폰 브라우저가 MediaPipe Tasks Vision(JS)으로 하고,
+# 서버는 좌표 변환만 한다(perception/face_tracker.py, hand_tracker.py,
+# body_tracker.py 참고). 기구학 모듈과 마찬가지로 이 프로젝트의 인식
+# 파이프라인은 이제 표준 라이브러리 + opencv/numpy만으로 돈다.
+
+# --- 라즈베리파이(조명)에서만 필요 --------------------------------------
+# raspberry-server/server.py는 파이에서 따로 실행한다. 파이에 설치:
+#   sudo apt install -y python3-flask
+#   sudo apt install -y python3-lgpio       # GPIO (파이 5·4 공통)
+#   인터넷 중계(다른 망에서 조명 제어)에는 추가 설치가 필요 없다 —
+#   파이썬 표준 라이브러리(urllib)만 쓴다.
+#       pigpio는 파이 5에서 동작하지 않고 최근 OS에는 패키지도 없다
+#       ("no installation candidate"). 스크립트가 자동으로 lgpio를 쓴다.

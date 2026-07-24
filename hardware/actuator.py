@@ -1,14 +1,14 @@
-from .control_table import *
 from .controller import *
-from logger import Logger
+from fundamental.const import AX_18A, HardwareActuatorConst
+from fundamental.logger import Logger
 from kinematics.urdf_loader import load_arm
 
 import time
 
 class Actuator:
-    __TIME_INTERVAL = 0.025
+    __TIME_INTERVAL = HardwareActuatorConst.TIME_INTERVAL_S
 
-    __MIN_SPEED = 1
+    __MIN_SPEED = HardwareActuatorConst.MIN_SPEED_PERCENT
 
     def __init__(self, id: int, model: str, controller: Controller):
         self.id = id
@@ -19,11 +19,25 @@ class Actuator:
 
         Logger.log("ACTUATOR", f"ID {self.id} initialized (model={model})")
         self.controller.set_speed(self.id, self.__MIN_SPEED, self.control_table)
+        self._last_speed = self.__MIN_SPEED
 
-    def goto(self, degree: float, speed: float = 10):
+    def goto(self, degree: float, speed: float = HardwareActuatorConst.DEFAULT_SPEED_PERCENT):
         Logger.log("ACTUATOR", f"ID {self.id} goto degree={degree} speed={speed}")
-        self.controller.set_speed(self.id, speed, self.control_table)
-        time.sleep(self.__TIME_INTERVAL)
+        # Moving_Speed is only re-written when it actually changes. Every
+        # caller in this codebase drives with the same default speed, so
+        # without this check goto() was writing Moving_Speed on every single
+        # call (one extra TxRx round trip per joint, plus a mandatory 25ms
+        # settle sleep) purely to rewrite the value already sitting in the
+        # register — doubling serial traffic per move and, when a follower
+        # commands a new position on every processed camera frame, adding up
+        # to a blocking delay per frame large enough to stall the display
+        # loop. Skipping the redundant write also means one less chance for
+        # a corrupted packet to land a bad value in Moving_Speed (this
+        # hardware does intermittently report bad status packets).
+        if speed != self._last_speed:
+            self.controller.set_speed(self.id, speed, self.control_table)
+            self._last_speed = speed
+            time.sleep(self.__TIME_INTERVAL)
         self.controller.set_goal_position(self.id, degree, self.control_table)
 
     def get_position(self):
@@ -48,7 +62,8 @@ class ArmController:
             raise ValueError(f"Missing actuators for joint id(s): {missing}")
         self.actuators = [by_id[joint.id] for joint in self.arm.joints]
 
-    def goto_position(self, target_pos, target_rot=None, speed: float = 10, seed=None):
+    def goto_position(self, target_pos, target_rot=None,
+                       speed: float = HardwareActuatorConst.DEFAULT_SPEED_PERCENT, seed=None):
         """Solve IK for `target_pos` and drive every actuator to the result.
 
         Returns (q, converged) from kinematics.Arm.ik. Leaves the actuators
@@ -66,7 +81,7 @@ class ArmController:
             actuator.goto(deg, speed=speed)
         return q, converged
 
-    def goto_joints(self, servo_degs, speed: float = 10):
+    def goto_joints(self, servo_degs, speed: float = HardwareActuatorConst.DEFAULT_SPEED_PERCENT):
         """FK-style control: command EVERY actuator to a given servo angle and
         return the resulting end-effector position via forward kinematics.
 

@@ -1,279 +1,1583 @@
 <!doctype html>
-<html lang="en">
+<html lang="ko">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>desky mobile camera</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#EDEEF1">
+  <title>desky — 로봇 시야</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='theme.css') }}">
   <style>
-    body { font-family: system-ui, sans-serif; max-width: 480px; margin: 1rem auto; padding: 0 1rem; color: #222; }
-    h1 { font-size: 1.2rem; }
-    video { width: 100%; border-radius: 8px; background: #000; }
-    button { padding: 0.6rem 1.2rem; font-size: 1rem; margin-top: 0.75rem; cursor: pointer; }
-    #status { font-family: monospace; white-space: pre-wrap; margin-top: 0.75rem; }
-    .error { color: #b00020; }
-    .ok { color: #1a7a1a; }
-    section { border: 1px solid #ddd; border-radius: 8px; padding: 1rem; margin-top: 1.5rem; }
-    section h2 { margin-top: 0; font-size: 1.1rem; }
-    textarea { width: 100%; box-sizing: border-box; padding: 0.5rem; font-family: inherit; resize: vertical; }
-    select { padding: 0.4rem; margin-top: 0.5rem; }
-    #ask-result { font-family: monospace; white-space: pre-wrap; margin-top: 0.75rem; }
-    .banner { padding: 0.75rem 1rem; border-radius: 8px; margin-top: 0.75rem; background: #fff3cd; color: #7a5b00; border: 1px solid #f0d999; }
-    .ask-controls { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; margin-top: 0.5rem; }
-    .ask-controls select, .ask-controls button { margin-top: 0; }
-    #mic-btn.listening { background: #b00020; color: #fff; }
+    /* ===================================================================
+       desky mobile — 팔 끝에 장착된 폰에서 여는 계기판.
+       색·글꼴·칩/큰버튼 같은 공통 요소는 static/theme.css에 있고, 여기에는
+       이 화면만의 배치(좌: 듣는 면 / 우: 카메라)만 남긴다.
+       역할별 색: 인디고=살아있는 것(영상·로봇의 말), 그래파이트=사용자 동작,
+       잉크=듣는 면. 가로(landscape) 기준으로 설계하고 세로에서는 세로 스택.
+       =================================================================== */
+    /* ---------- 전체 레이아웃 ---------- */
+    .app {
+      height: 100%;
+      display: grid;
+      grid-template-rows: auto 1fr;
+      gap: var(--gap);
+      padding: calc(var(--gap) + env(safe-area-inset-top)) var(--gap)
+               calc(var(--gap) + env(safe-area-inset-bottom));
+    }
+
+    /* ---------- 상단 레일 ---------- */
+    .rail {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      padding: 0 4px;
+      min-height: 22px;
+    }
+    .brand {
+      font-weight: 700;
+      font-size: 15px;
+      letter-spacing: -.02em;
+    }
+    .brand span { color: var(--signal); }
+    .rail .spacer { flex: 1; }
+    .stat { display: flex; align-items: center; gap: 6px; }
+    .dot {
+      width: 7px; height: 7px; border-radius: 50%;
+      background: var(--dim);
+      flex: none;
+    }
+    .dot.on { background: var(--signal); animation: breathe 2.4s ease-in-out infinite; }
+    @keyframes breathe { 0%,100% { opacity: 1; } 50% { opacity: .25; } }
+
+    /* ---------- 본문 그리드: 좌(대화) / 우(카메라) ---------- */
+    .grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      grid-template-rows: 1fr auto;
+      gap: var(--gap);
+      min-height: 0;
+    }
+
+    /* ---------- 좌상: 듣는 면 ---------- */
+    .heard {
+      grid-column: 1; grid-row: 1;
+      position: relative;
+      display: flex;
+      flex-direction: column;
+      min-height: 0;
+      background: var(--ink);
+      border-radius: var(--r-panel);
+      padding: 16px 18px;
+      overflow: hidden;
+    }
+    /* 시그니처: 듣는 동안 위쪽 인디고 바가 호흡한다 */
+    .heard::before {
+      content: "";
+      position: absolute; inset: 0 0 auto 0;
+      height: 3px;
+      background: var(--signal-lt);
+      transform: scaleX(0);
+      transform-origin: left;
+      transition: transform .35s ease;
+    }
+    .heard.live::before { transform: scaleX(1); animation: sweep 2.8s ease-in-out infinite; }
+    @keyframes sweep { 0%,100% { opacity: .35; } 50% { opacity: 1; } }
+
+    .heard .tag { color: var(--dim-ink); }
+    .heard-head { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
+    .heard-head .spacer { flex: 1; }
+
+    /* 인식 중인 말 — 글자 농도가 곧 신뢰도 */
+    #transcript {
+      flex: 1;
+      min-height: 0;
+      overflow-y: auto;
+      color: var(--bone);
+      font-size: clamp(17px, 2.4vw, 24px);
+      font-weight: 600;
+      line-height: 1.42;
+      letter-spacing: -.01em;
+      word-break: keep-all;
+    }
+    #transcript .interim { opacity: .38; font-weight: 500; }
+    #transcript.empty { color: var(--dim-ink); font-weight: 500; font-size: 15px; }
+
+    .heard hr {
+      border: 0; border-top: 1px solid var(--line-ink);
+      margin: 12px 0 10px;
+    }
+    #ask-result {
+      max-height: 34%;
+      overflow-y: auto;
+      color: var(--signal-lt);
+      font-size: clamp(14px, 1.7vw, 17px);
+      font-weight: 500;
+      line-height: 1.5;
+      white-space: pre-wrap;
+      word-break: keep-all;
+    }
+    #ask-result.error { color: var(--alert-lt); }
+
+    .type-row { display: flex; gap: 8px; margin-top: 10px; }
+    #ask-text {
+      flex: 1; min-width: 0;
+      background: var(--ink-2);
+      border: 1px solid var(--line-ink);
+      border-radius: 10px;
+      color: var(--bone);
+      font-family: var(--sans);
+      font-size: 13px;
+      padding: 8px 10px;
+      resize: none;
+      height: 34px;
+    }
+    #ask-text::placeholder { color: var(--dim-ink); }
+
+    /* ---------- 좌하: 두 개의 주요 동작 ---------- */
+    .actions {
+      grid-column: 1; grid-row: 2;
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: var(--gap);
+    }
+    /* ---------- 우: 카메라 ---------- */
+    .cam {
+      grid-column: 2; grid-row: 1 / span 2;
+      position: relative;
+      display: flex;
+      flex-direction: column;
+      min-height: 0;
+      background: var(--panel);
+      border-radius: var(--r-panel);
+      padding: 14px;
+      overflow: hidden;
+    }
+    .cam-head { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
+    .cam-head .spacer { flex: 1; }
+
+    .stage {
+      position: relative;
+      flex: 1;
+      min-height: 0;
+      border-radius: 12px;
+      overflow: hidden;
+      background: var(--signal);   /* 영상 오기 전 대기 상태 = 인디고 면 */
+    }
+    .stage > * {
+      position: absolute; inset: 0;
+      width: 100%; height: 100%;
+      object-fit: cover;
+      display: block;
+    }
+    #scan-canvas { object-fit: contain; background: var(--ink); cursor: pointer; }
+
+    /* 화면 방향 보정 — #preview는 JS가 회전각에 맞춰 width/height/transform을
+       직접 계산해 주므로, .stage > * 의 inset:0 대신 중심 기준 배치로 뺀다. */
+    #preview {
+      inset: auto;
+      top: 50%; left: 50%;
+      transform: translate(-50%, -50%);
+    }
+
+    /* 카메라 꺼짐 / 권한 필요할 때 덮는 면 */
+    .veil {
+      position: absolute; inset: 0;
+      display: none;
+      flex-direction: column;
+      align-items: center; justify-content: center;
+      gap: 12px;
+      background: var(--signal);
+      color: var(--signal-ink);
+      text-align: center;
+      padding: 20px;
+      z-index: 3;
+    }
+    .veil.show { display: flex; }
+    /* 덮개는 인디고 면이므로 그 위 버튼만 따로 — 흰 알약에 인디고 글자 */
+    .veil-btn { background: var(--bone); border-color: var(--bone); color: var(--signal-dp); }
+    .veil p { margin: 0; font-size: 13px; font-weight: 600; max-width: 24ch; word-break: keep-all; }
+
+    /* 스캔 결과 시트 — 긴 문서 텍스트를 읽는 면 */
+    .sheet {
+      position: absolute; inset: 0;
+      z-index: 4;
+      display: none;
+      flex-direction: column;
+      background: var(--ink);
+      color: var(--bone);
+      padding: 14px;
+    }
+    .sheet.show { display: flex; }
+    .sheet-head { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+    .sheet-head .spacer { flex: 1; }
+    #doc-parse-result {
+      flex: 1;
+      overflow-y: auto;
+      font-size: 14px;
+      line-height: 1.55;
+      white-space: pre-wrap;
+      word-break: keep-all;
+      margin: 0;
+    }
+    #doc-parse-result.error { color: var(--alert-lt); }
+    .sheet-foot { display: flex; gap: 8px; margin-top: 10px; }
+
+    .cam-foot { display: flex; gap: 6px; margin-top: 10px; flex-wrap: wrap; }
+
+    /* 잉크 면 위 선택 상자 — 칩과 같은 크기·같은 둥근 모양으로 맞춘다 */
+    select#ask-mode {
+      appearance: none;
+      background: var(--ink-2);
+      color: var(--bone);
+      border: 1px solid var(--line-ink);
+      border-radius: 999px;
+      font-family: var(--mono);
+      font-size: 11px;
+      padding: 5px 10px;
+      cursor: pointer;
+    }
+
+    /* 상태 줄 — 화면 밖으로 밀지 않고 레일에 얹는다 */
+    #status { font-family: var(--mono); font-size: 10px; color: var(--dim); }
+    #status.error { color: var(--alert); }
+    #status.ok { color: var(--signal-dp); }
+
+    #scan-status { font-family: var(--mono); font-size: 10px; color: var(--dim); }
+    #scan-status.error { color: var(--alert); }
+
+    .banner {
+      background: var(--alert-wash); color: var(--alert);
+      border-radius: 10px; padding: 8px 10px;
+      font-size: 11px; margin-bottom: 8px;
+      word-break: keep-all;
+    }
+
+    /* ---------- 세로 모드: 세로 스택 ---------- */
+    @media (orientation: portrait) {
+      .app { height: auto; min-height: 100%; }
+      .grid { grid-template-columns: 1fr; grid-template-rows: none; }
+      .heard { grid-column: 1; grid-row: auto; min-height: 34vh; }
+      .cam   { grid-column: 1; grid-row: auto; min-height: 44vh; }
+      .actions { grid-column: 1; grid-row: auto; }
+    }
   </style>
 </head>
 <body>
-  <h1>desky mobile camera</h1>
-  <video id="preview" autoplay playsinline muted></video>
-  <div>
-    <button id="start-btn">Start camera + streaming</button>
+<div class="app">
+
+  <!-- ===== 상단 레일 ===== -->
+  <div class="rail">
+    <div class="brand">desky<span>.</span></div>
+    <div class="stat">
+      <span class="dot" id="cam-dot"></span>
+      <span class="tag" id="cam-label">카메라 대기</span>
+    </div>
+    <div class="stat">
+      <span class="dot" id="mic-dot"></span>
+      <span class="tag" id="mic-label">마이크 꺼짐</span>
+    </div>
+    <div class="spacer"></div>
+    <div id="status">시작하는 중</div>
   </div>
-  <div id="status">idle</div>
 
-  <canvas id="capture" style="display:none"></canvas>
+  <div class="grid">
 
-  <section>
-    <h2>Ask Gemini</h2>
-    {% if not gemini_configured %}
-    <div class="banner">
-      ⚠ Gemini not configured{% if gemini_error %} — {{ gemini_error }}{% endif %}.
+    <!-- ===== 좌상: 듣는 면 ===== -->
+    <section class="heard on-ink" id="heard-panel">
+      <div class="heard-head">
+        <span class="tag">들은 말</span>
+        <div class="spacer"></div>
+        <select id="ask-mode" {{ "disabled" if not gemini_configured }}>
+          <option value="chat">대화</option>
+          <option value="summary">요약</option>
+        </select>
+        <a class="chip" id="cal-btn" href="{{ url_for('calendar_page') }}"
+           title="달력을 열어 일정을 보고 추가합니다">일정</a>
+        <button class="chip" id="mic-btn">대화 시작</button>
+      </div>
+
+      {% if not gemini_configured %}
+      <div class="banner">
+        Gemini가 설정되지 않았습니다{% if gemini_error %} — {{ gemini_error }}{% endif %}.
+        <code>.env</code>에 <code>GEMINI_API_KEY</code>를 넣고 다시 실행하세요.
+      </div>
+      {% endif %}
+
+      <div id="transcript" class="empty">대화를 시작하면 여기에 들은 말이 나타납니다.</div>
+
+      <div id="answer-block" hidden>
+        <hr>
+        <span class="tag">답</span>
+        <div id="ask-result"></div>
+      </div>
+
+      <div class="type-row">
+        <textarea id="ask-text" rows="1" placeholder="직접 입력해도 됩니다" {{ "disabled" if not gemini_configured }}></textarea>
+        <button class="chip accent" id="ask-btn" {{ "disabled" if not gemini_configured }}>보내기</button>
+        <button class="chip" id="stop-speak-btn" title="읽기 멈춤">멈춤</button>
+        <button class="chip" id="speak-btn" hidden>읽기</button>
+      </div>
+    </section>
+
+    <!-- ===== 좌하: 주요 동작 ===== -->
+    <div class="actions">
+      <button class="big" id="doc-summary-btn">
+        <small>Summarize</small>
+        문서 요약하기
+      </button>
     </div>
-    {% endif %}
-    <textarea id="ask-text" rows="3" placeholder="Type a message or paste text to summarize..." {{ "disabled" if not gemini_configured }}></textarea>
-    <div class="ask-controls">
-      <button id="mic-btn" title="Speak your question">🎤</button>
-      <select id="ask-mode" {{ "disabled" if not gemini_configured }}>
-        <option value="chat">Chat</option>
-        <option value="summary">Summarize</option>
-      </select>
-      <button id="ask-btn" {{ "disabled" if not gemini_configured }}>Ask</button>
-    </div>
-    <div id="ask-result"></div>
-    <div class="ask-controls">
-      <button id="speak-btn">🔊 Speak answer</button>
-      <button id="stop-speak-btn">⏹ Stop</button>
-    </div>
-  </section>
 
-  <script>
-    // const FRAME_INTERVAL_MS = 200; // ~5 fps, kept low for bandwidth
-    const FRAME_INTERVAL_MS = 66; // ~5 fps, kept low for bandwidth
-    const JPEG_QUALITY = 0.6;
+    <!-- ===== 우: 카메라 ===== -->
+    <section class="cam">
+      <div class="cam-head">
+        <span class="tag">카메라</span>
+        <span class="chip on">라이브</span>
+        <div class="spacer"></div>
+        <span class="tag num" id="frame-count">0 프레임</span>
+      </div>
 
-    const video = document.getElementById("preview");
-    const canvas = document.getElementById("capture");
-    const statusEl = document.getElementById("status");
-    const startBtn = document.getElementById("start-btn");
+      <div class="stage">
+        <video id="preview" autoplay playsinline muted></video>
 
-    let ws = null;
-    let mediaStream = null; // set in start(); the mic recorder pulls its audio track from this
-    let captureTimer = null;
-    let framesSent = 0;
+        <!-- 카메라 꺼짐 / 권한 필요 -->
+        <div class="veil" id="cam-veil">
+          <p id="veil-msg">카메라를 켜는 중입니다</p>
+          <button class="chip veil-btn" id="start-btn">카메라 켜기</button>
+        </div>
 
-    function setStatus(text, className = "") {
-      statusEl.textContent = text;
-      statusEl.className = className;
+        <!-- 문서 읽기 결과 시트 -->
+        <div class="sheet on-ink" id="doc-sheet">
+          <div class="sheet-head">
+            <span class="tag">문서 내용</span>
+            <div class="spacer"></div>
+            <button class="chip" id="sheet-close">닫기</button>
+          </div>
+          <pre id="doc-parse-result"></pre>
+          <div class="sheet-foot">
+            <button class="chip accent" id="doc-speak-btn">읽어주기</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="cam-foot">
+        <button class="chip accent" id="scan-btn">문서 스캔</button>
+        <button class="chip warn" id="stop-cam-btn">카메라 끄기</button>
+        <button class="chip on" id="gesture-btn" title="가위=스캔, 바위=대화, 보=카메라 끄기">제스처 켬</button>
+        <button class="chip" id="light-on-btn">불 켜기</button>
+        <button class="chip" id="light-off-btn">불 끄기</button>
+        <span class="spacer" style="flex:1"></span>
+        <span id="scan-status"></span>
+      </div>
+    </section>
+
+  </div>
+</div>
+
+<canvas id="capture" style="display:none"></canvas>
+
+<script>
+  /* =====================================================================
+     1. 카메라 스트리밍 — 페이지를 열면 자동으로 시작한다.
+     ===================================================================== */
+  const FRAME_INTERVAL_MS = 66;   // 약 20fps
+  const JPEG_QUALITY = 0.6;
+
+  const video     = document.getElementById("preview");
+  const stageEl   = document.querySelector(".stage");
+  const canvas    = document.getElementById("capture");
+  const statusEl  = document.getElementById("status");
+  const startBtn  = document.getElementById("start-btn");
+  const camVeil   = document.getElementById("cam-veil");
+  const veilMsg   = document.getElementById("veil-msg");
+  const camDot    = document.getElementById("cam-dot");
+  const camLabel  = document.getElementById("cam-label");
+  const frameCountEl = document.getElementById("frame-count");
+
+  let ws = null;
+  let mediaStream = null;
+  let captureTimer = null;
+  let framesSent = 0;
+
+  function setStatus(text, className = "") {
+    statusEl.textContent = text;
+    statusEl.className = className;
+  }
+
+  /** 레일의 카메라 상태 표시와 덮개를 한 번에 갱신한다. */
+  function setCameraState(on, message) {
+    camDot.classList.toggle("on", on);
+    camLabel.textContent = on ? "송출 중" : "카메라 꺼짐";
+    camVeil.classList.toggle("show", !on);
+    if (message) veilMsg.textContent = message;
+    startBtn.hidden = on;
+  }
+
+  // ── 화면 방향 보정 ──────────────────────────────────────
+  // 이 휴대폰은 손에 들고 쓰는 게 아니라 팔의 end-effector에 고정 장착돼
+  // 있다. 브라우저는 항상 "지금 든 방향에서 똑바로" 보이도록 영상을 자체
+  // 보정하는데, 마운트된 각도가 사람이 자연스럽게 드는 각도와 다르면 그
+  // 보정 기준이 실제로 앉아서 보는 방향과 어긋난다. 예전에는 서버에서
+  // 90도 고정 회전으로 땜빵했지만(마운트를 바꾸면 다시 깨짐), 대신 브라우저
+  // Screen Orientation API로 지금 회전 각도를 읽어 그만큼 반대로 돌려서
+  // 항상 같은 최종 방향이 나오게 한다 — 미리보기(<video>)와 웹소켓으로
+  // 보내는 프레임 둘 다 동일하게 적용해서 화면에 보이는 것과 서버가 받는
+  // 것이 같은 방향이 되도록 맞춘다.
+  //
+  // angle=0(세로, 회전 없음)일 때 90도를 돌려주는 게 기존 하드코딩 회전과
+  // 같은 기준점이다 — 마운트를 바꿔서 기준이 달라지면 이 90 상수만 조정.
+  let currentRotation = 0;
+
+  function correctionAngle() {
+    let angle = 0;
+    if (screen.orientation && typeof screen.orientation.angle === "number") {
+      angle = screen.orientation.angle;
+    } else if (typeof window.orientation === "number") {
+      angle = (window.orientation + 360) % 360;
     }
+    return ((90 - angle) % 360 + 360) % 360;
+  }
 
-    function connectSocket() {
-      const proto = location.protocol === "https:" ? "wss:" : "ws:";
-      ws = new WebSocket(`${proto}//${location.host}/ws/camera`);
-      ws.binaryType = "arraybuffer";
+  /** 회전각에 맞춰 #preview의 표시 크기를 .stage 박스 기준으로 다시 잡는다. */
+  function layoutPreview() {
+    currentRotation = correctionAngle();
+    const swap = currentRotation === 90 || currentRotation === 270;
+    const stageWidth = stageEl.clientWidth, stageHeight = stageEl.clientHeight;
+    video.style.width  = (swap ? stageHeight : stageWidth) + "px";
+    video.style.height = (swap ? stageWidth : stageHeight) + "px";
+    video.style.transform = `translate(-50%, -50%) scaleX(-1) rotate(${currentRotation}deg)`;
+  }
 
-      ws.onopen = () => setStatus("camera + mic granted, connected, streaming...", "ok");
-      ws.onclose = () => {
-        setStatus("disconnected from server", "error");
-        stopCapture();
-      };
-      ws.onerror = () => setStatus("websocket error", "error");
-      // The server also pushes voice-clip transcripts back over this same
-      // connection (see webapp/app.py's ws_camera) — everything else on this
-      // socket is one-way (client -> server), so any text message is a
-      // transcript/error reply.
-      ws.onmessage = (event) => {
-        let msg;
-        try {
-          msg = JSON.parse(event.data);
-        } catch (e) {
-          return;
-        }
-        const el = document.getElementById("ask-result");
-        if (msg.type === "transcript") {
-          document.getElementById("ask-text").value = msg.text;
-          ask();
-        } else if (msg.type === "error") {
-          el.textContent = "STT error: " + msg.error;
-          el.className = "error";
-        }
-      };
+  video.addEventListener("loadedmetadata", layoutPreview);
+  window.addEventListener("resize", layoutPreview);
+  window.addEventListener("orientationchange", layoutPreview);
+  if (screen.orientation) screen.orientation.addEventListener("change", layoutPreview);
+
+  /** 서버로 프레임과 음성을 보내는 WebSocket을 연다. */
+  function connectSocket() {
+    const proto = location.protocol === "https:" ? "wss:" : "ws:";
+    ws = new WebSocket(`${proto}//${location.host}/ws/camera`);
+    ws.binaryType = "arraybuffer";
+    ws.onopen  = () => setStatus("서버 연결됨", "ok");
+    ws.onclose = () => { setStatus("서버 연결 끊김", "error"); stopCapture(); };
+    ws.onerror = () => setStatus("웹소켓 오류", "error");
+    ws.onmessage = (event) => {
+      let msg;
+      try { msg = JSON.parse(event.data); } catch (e) { return; }
+      if (msg.type === "transcript") {
+        document.getElementById("ask-text").value = msg.text;
+        ask();
+      } else if (msg.type === "gesture") {
+        // 서버의 손 인식이 가위/바위/보를 확정했을 때 내려오는 명령.
+        handleGestureCommand(msg.action);
+      } else if (msg.type === "error") {
+        resultEl.textContent = "음성 인식 오류: " + msg.error;
+        resultEl.className = "error";
+      }
+    };
+  }
+
+  /** 비디오 한 프레임을 화면 방향 보정에 맞춰 회전시켜 JPEG로 만들고 소켓으로 보낸다. */
+  function captureLoop() {
+    if (!video.videoWidth) return;
+    const vw = video.videoWidth, vh = video.videoHeight;
+    const swap = currentRotation === 90 || currentRotation === 270;
+    const outW = swap ? vh : vw, outH = swap ? vw : vh;
+    if (canvas.width !== outW || canvas.height !== outH) {
+      canvas.width = outW;
+      canvas.height = outH;
     }
-
-    function captureLoop() {
-      if (!video.videoWidth) return; // video metadata not ready yet
-      if (canvas.width !== video.videoWidth) {
-        canvas.width = video.videoWidth;
-        canvas.height = video.videoHeight;
+    const ctx = canvas.getContext("2d");
+    ctx.save();
+    ctx.translate(outW / 2, outH / 2);
+    ctx.rotate(currentRotation * Math.PI / 180);
+    ctx.scale(-1, 1);
+    ctx.drawImage(video, -vw / 2, -vh / 2, vw, vh);
+    ctx.restore();
+    // 손/얼굴/몸 인식은 셋 다 이 방향 보정이 끝난 캔버스에 대고 돈다(아래
+    // 10번 섹션) — 서버가 받는 프레임과 정확히 같은 좌표계(이미 정방향으로
+    // 회전/미러링됨)여야 랜드마크 좌표가 서버 쪽 계산(깊이 추정·월드 변환·
+    // 제스처 판정)과 어긋나지 않는다.
+    if (window.__sendHandLandmarks) window.__sendHandLandmarks(canvas, ws);
+    if (window.__sendFaceLandmarks) window.__sendFaceLandmarks(canvas, ws);
+    if (window.__sendBodyLandmarks) window.__sendBodyLandmarks(canvas, ws);
+    canvas.toBlob((blob) => {
+      if (blob && ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(blob);
+        framesSent += 1;
+        frameCountEl.textContent = framesSent.toLocaleString() + " 프레임";
       }
-      const ctx = canvas.getContext("2d");
-      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-      canvas.toBlob(
-        (blob) => {
-          if (blob && ws && ws.readyState === WebSocket.OPEN) {
-            ws.send(blob);
-            framesSent += 1;
-            setStatus(`streaming... ${framesSent} frames sent`, "ok");
-          }
-        },
-        "image/jpeg",
-        JPEG_QUALITY
-      );
+    }, "image/jpeg", JPEG_QUALITY);
+  }
+
+  function stopCapture() {
+    if (captureTimer) { clearInterval(captureTimer); captureTimer = null; }
+  }
+
+  /** 카메라 권한을 받고 스트리밍을 시작한다. 자동 실행과 버튼이 함께 쓴다. */
+  async function start() {
+    if (!window.isSecureContext || !navigator.mediaDevices) {
+      setStatus("HTTPS 필요", "error");
+      setCameraState(false, "카메라는 HTTPS에서만 열립니다. https://<서버IP>:8000/mobile 로 접속하고 인증서 경고를 통과하세요.");
+      return false;
     }
-
-    function stopCapture() {
-      if (captureTimer) {
-        clearInterval(captureTimer);
-        captureTimer = null;
-      }
+    setStatus("카메라 권한 요청 중");
+    try {
+      mediaStream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: { exact: "user" } }, audio: false,
+      });
+      video.srcObject = mediaStream;
+      connectSocket();
+      captureTimer = setInterval(captureLoop, FRAME_INTERVAL_MS);
+      setCameraState(true);
+      return true;
+    } catch (e) {
+      setStatus("카메라 사용 불가", "error");
+      setCameraState(false, "카메라 권한이 필요합니다. 아래 버튼을 누르고 권한을 허용하세요.");
+      return false;
     }
+  }
 
-    async function start() {
-      if (!window.isSecureContext || !navigator.mediaDevices) {
-        setStatus(
-          "Camera access needs HTTPS. Open this page as https://<server-ip>:8000/mobile " +
-            "(accept the self-signed certificate warning).",
-          "error"
-        );
-        return;
-      }
-      startBtn.disabled = true;
-      setStatus("requesting camera + microphone permission...");
-      try {
-        // Both video and audio are requested together so the browser's
-        // permission prompt covers the microphone too. Video frames stream
-        // continuously; the audio track only gets sent when the mic button
-        // records a voice question (see the mic-btn click handler below).
-        const stream = await navigator.mediaDevices.getUserMedia({
-          video: { facingMode: "user" },
-          audio: true,
-        });
-        mediaStream = stream;
-        video.srcObject = stream;
-        connectSocket();
-        captureTimer = setInterval(captureLoop, FRAME_INTERVAL_MS);
-      } catch (e) {
-        setStatus("permission denied or camera unavailable: " + e, "error");
-        startBtn.disabled = false;
-      }
+  /** 프레임 전송 중지 + 소켓 종료 + 카메라 트랙 정지. 음성 명령에서도 부른다. */
+  function stopCamera() {
+    stopCapture();
+    if (ws) { try { ws.close(); } catch (e) {} ws = null; }
+    if (mediaStream) { mediaStream.getTracks().forEach(t => t.stop()); mediaStream = null; }
+    video.srcObject = null;
+    framesSent = 0;
+    frameCountEl.textContent = "0 프레임";
+    setCameraState(false, "카메라가 꺼졌습니다.");
+    setStatus("대기", "");
+  }
+
+  startBtn.addEventListener("click", start);
+  document.getElementById("stop-cam-btn").addEventListener("click", stopCamera);
+
+  /* =====================================================================
+     2. Gemini 질문 / 답 읽어주기
+     ===================================================================== */
+  const resultEl  = document.getElementById("ask-result");
+  const askTextEl = document.getElementById("ask-text");
+  const answerBlock = document.getElementById("answer-block");
+
+  // iOS Safari의 speechSynthesis는 "사용자 제스처 호출 스택 안"에서 speak()가
+  // 불려야만 소리를 낸다 — 이 앱의 TTS는 거의 다 `await fetch(...)` 뒤에
+  // speak()를 부르므로(Gemini 응답을 받은 다음에야 읽을 수 있으니 당연히
+  // 그렇다) 그 시점엔 이미 제스처 컨텍스트가 끊겨 iOS가 조용히 아무 것도
+  // 하지 않는다(에러도 안 남는다 — 그래서 "안 된다"로만 보인다). 페이지에서
+  // 처음 탭이 발생한 그 순간(동기 호출 스택 안)에 무음(volume=0) 발화를 한 번
+  // 실행해 두면, Web Audio unlock과 같은 원리로 그 뒤로는 같은 페이지 세션
+  // 안에서 비동기로 부르는 speak()도 정상 재생된다 — 매번 다시 unlock할
+  // 필요는 없다.
+  let ttsUnlocked = false;
+  function unlockSpeechSynthesis() {
+    if (ttsUnlocked || !('speechSynthesis' in window)) return;
+    ttsUnlocked = true;
+    const warmup = new SpeechSynthesisUtterance(" ");
+    warmup.volume = 0;
+    window.speechSynthesis.speak(warmup);
+  }
+  document.addEventListener("pointerdown", unlockSpeechSynthesis, { once: true });
+
+  // 한국어 음성을 명시적으로 골라 둔다 — voice를 안 정하고 lang="ko-KR"만
+  // 믿으면, 기기에 맞는 음성이 아직 로드되지 않았거나(iOS는 getVoices()가
+  // 비동기로 채워진다) 없는 경우 일부 iOS 버전에서 소리 없이 실패하는 사례가
+  // 있었다. voiceschanged 이후 다시 골라 캐시해 둔다.
+  let koVoice = null;
+  function pickKoreanVoice() {
+    if (!('speechSynthesis' in window)) return;
+    const voices = window.speechSynthesis.getVoices();
+    koVoice = voices.find(v => v.lang === "ko-KR") || voices.find(v => v.lang && v.lang.startsWith("ko")) || null;
+  }
+  if ('speechSynthesis' in window) {
+    pickKoreanVoice();
+    window.speechSynthesis.onvoiceschanged = pickKoreanVoice;
+  }
+
+  // 발화 중인 utterance를 여기 붙잡아 둔다 — WebKit은 다른 참조가 없는
+  // SpeechSynthesisUtterance를 말하는 도중에 가비지 컬렉트해서 소리가
+  // 중간에(또는 아예) 끊기는 알려진 버그가 있다. 지역 변수로만 두면 이
+  // 참조가 사라지므로, 끝날 때까지 모듈 스코프에 붙잡아 둔다.
+  let activeUtterance = null;
+  function makeUtterance(text) {
+    const utter = new SpeechSynthesisUtterance(text);
+    utter.lang = "ko-KR"; utter.rate = 1.0;
+    if (koVoice) utter.voice = koVoice;
+    activeUtterance = utter;
+    return utter;
+  }
+
+  // 답이 비면 구분선과 라벨까지 접는다. 답을 쓰는 곳이 여러 군데라
+  // 각 호출부를 고치는 대신 내용 변화를 관찰해 한 곳에서 처리한다.
+  new MutationObserver(() => {
+    answerBlock.hidden = !resultEl.textContent.trim();
+  }).observe(resultEl, { childList: true, characterData: true, subtree: true });
+
+  /** 입력창의 글을 Gemini에 보내고 답을 표시한 뒤 소리 내어 읽는다. */
+  async function ask() {
+    const text = askTextEl.value;
+    const mode = document.getElementById("ask-mode").value;
+    if (!text) { resultEl.textContent = "먼저 할 말을 입력하세요."; resultEl.className = "error"; return; }
+    resultEl.textContent = "생각 중..."; resultEl.className = "";
+    try {
+      const res = await fetch("/api/ask", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text, mode }),
+      });
+      const data = await res.json();
+      if (!res.ok || data.error) { resultEl.textContent = "오류: " + (data.error || res.status); resultEl.className = "error"; }
+      else { resultEl.textContent = data.answer; resultEl.className = ""; speak(data.answer); }
+    } catch (e) { resultEl.textContent = "요청 실패: " + e; resultEl.className = "error"; }
+  }
+  document.getElementById("ask-btn").addEventListener("click", ask);
+
+  /** 주어진 글을 한국어 TTS로 읽는다. */
+  function speak(text) {
+    if (!('speechSynthesis' in window) || !text || !text.trim()) return;
+    window.speechSynthesis.cancel();
+    const utter = makeUtterance(text);
+    window.speechSynthesis.speak(utter);
+  }
+  function stopSpeak() { window.speechSynthesis.cancel(); }
+
+  document.getElementById("speak-btn").addEventListener("click", () => speak(resultEl.textContent));
+  document.getElementById("stop-speak-btn").addEventListener("click", stopSpeak);
+
+  /* =====================================================================
+     3. 연속 음성 대화 세션 (브라우저 STT)
+        인식 중인 말은 흐리게, 확정된 말은 선명하게 — 농도가 곧 신뢰도.
+     ===================================================================== */
+  const micBtn      = document.getElementById("mic-btn");
+  const micDot      = document.getElementById("mic-dot");
+  const micLabel    = document.getElementById("mic-label");
+  const heardPanel  = document.getElementById("heard-panel");
+  const transcriptEl= document.getElementById("transcript");
+  const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+  const SILENCE_MS = 3000;      // 이만큼 조용하면 한 턴이 끝난 것으로 본다
+  const CONFIDENCE_MIN = 0.6;
+
+  let recognition = null, sessionActive = false, processing = false, speaking = false;
+  let currentText = "", committedBase = "", lastLen = 0, silenceTimer = null, speakWatchdog = null;
+
+  /** 확정된 말과 인식 중인 말을 서로 다른 농도로 그린다. */
+  function renderTranscript(committed, interim) {
+    if (!committed && !interim) {
+      transcriptEl.className = "empty";
+      transcriptEl.textContent = sessionActive ? "듣고 있습니다. 말해보세요." : "대화를 시작하면 여기에 들은 말이 나타납니다.";
+      return;
     }
+    transcriptEl.className = "";
+    transcriptEl.textContent = "";
+    if (committed) transcriptEl.appendChild(document.createTextNode(committed));
+    if (interim) {
+      const span = document.createElement("span");
+      span.className = "interim";
+      span.textContent = interim;
+      transcriptEl.appendChild(span);
+    }
+  }
 
-    startBtn.addEventListener("click", start);
+  /** 대화 세션의 켜짐/꺼짐을 화면 전체에 반영한다. */
+  function setSessionUI(active) {
+    micBtn.classList.toggle("on", active);
+    micBtn.textContent = active ? "대화 끝내기" : "대화 시작";
+    heardPanel.classList.toggle("live", active);
+    micDot.classList.toggle("on", active);
+    micLabel.textContent = active ? "듣는 중" : "마이크 꺼짐";
+  }
 
-    async function ask() {
-      const text = document.getElementById("ask-text").value;
-      const mode = document.getElementById("ask-mode").value;
-      const el = document.getElementById("ask-result");
-      if (!text) {
-        el.textContent = "type something first";
-        el.className = "error";
-        return;
-      }
-      el.textContent = "asking...";
-      el.className = "";
-      try {
-        const res = await fetch("/api/ask", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ text, mode }),
-        });
-        const data = await res.json();
-        if (!res.ok || data.error) {
-          el.textContent = "error: " + (data.error || res.status);
-          el.className = "error";
+  function clearSilenceTimer() { if (silenceTimer) { clearTimeout(silenceTimer); silenceTimer = null; } }
+  function resetSilenceTimer() { clearSilenceTimer(); silenceTimer = setTimeout(onSilence, SILENCE_MS); }
+
+  /** 침묵이 이어지면 한 턴을 끊고 명령인지 질문인지 판단한다. */
+  function onSilence() {
+    if (!sessionActive || processing || speaking) return;
+    const q = currentText.trim(); if (!q) return;
+    currentText = ""; committedBase = ""; lastLen = 0;
+    if (handleVoiceCommand(q)) return;
+    submitToGemini(q);
+  }
+
+  /** 한 턴의 말을 Gemini로 보내고, 답을 읽어준 뒤 다시 듣기로 돌아간다. */
+  async function submitToGemini(q) {
+    processing = true; clearSilenceTimer();
+    try { recognition.stop(); } catch (e) {}
+    resultEl.textContent = "생각 중..."; resultEl.className = "";
+    const mode = document.getElementById("ask-mode").value;
+    try {
+      const res = await fetch("/api/ask", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text: q, mode }),
+      });
+      const data = await res.json();
+      if (!res.ok || data.error) { resultEl.textContent = "오류: " + (data.error || res.status); resultEl.className = "error"; resumeListening(); }
+      else { resultEl.textContent = data.answer; resultEl.className = ""; speakThenResume(data.answer); }
+    } catch (e) { resultEl.textContent = "요청 실패: " + e; resultEl.className = "error"; resumeListening(); }
+  }
+
+  /** 답을 읽어주고, 다 읽으면 자동으로 다시 듣기 상태로 돌아간다. */
+  function speakThenResume(text) {
+    if (!('speechSynthesis' in window) || !text || !text.trim()) { resumeListening(); return; }
+    speaking = true; window.speechSynthesis.cancel();
+    const utter = makeUtterance(text);
+    const done = () => {
+      if (speakWatchdog) { clearTimeout(speakWatchdog); speakWatchdog = null; }
+      if (!speaking) return;
+      speaking = false; resumeListening();
+    };
+    utter.onend = done; utter.onerror = done;
+    // onend가 오지 않는 브라우저가 있어 길이에 비례한 예비 타이머를 둔다.
+    speakWatchdog = setTimeout(done, Math.max(5000, text.length * 120));
+    window.speechSynthesis.speak(utter);
+  }
+
+  /** 처리/말하기가 끝난 뒤 인식을 다시 켠다. */
+  function resumeListening() {
+    processing = false; speaking = false;
+    currentText = ""; committedBase = ""; lastLen = 0;
+    askTextEl.value = ""; renderTranscript("", "");
+    if (sessionActive) { try { recognition.start(); } catch (e) {} }
+  }
+
+  if (!SpeechRecognition) {
+    micBtn.disabled = true;
+    micBtn.textContent = "음성 미지원";
+    micLabel.textContent = "STT 미지원";
+  } else {
+    recognition = new SpeechRecognition();
+    recognition.lang = "ko-KR";
+    recognition.continuous = true;
+    recognition.interimResults = true;
+
+    recognition.onresult = (event) => {
+      if (processing || speaking) return;
+      let finalText = "", interimText = "";
+      for (let i = 0; i < event.results.length; i++) {
+        const res = event.results[i], alt = res[0];
+        if (res.isFinal) {
+          const conf = alt.confidence;
+          if (!(conf > 0 && conf < CONFIDENCE_MIN)) finalText += alt.transcript;
         } else {
-          el.textContent = data.answer;
-          el.className = "";
-          speak(data.answer); // read the answer aloud right away — hands-free on the phone
+          interimText += alt.transcript;
         }
-      } catch (e) {
-        el.textContent = "request failed: " + e;
-        el.className = "error";
       }
-    }
+      currentText = (committedBase + finalText + interimText).trim();
+      askTextEl.value = currentText;
+      renderTranscript((committedBase + finalText), interimText);
+      if (currentText.length > lastLen) { lastLen = currentText.length; resetSilenceTimer(); }
+    };
 
-    document.getElementById("ask-btn").addEventListener("click", ask);
-
-    // ── TTS: 브라우저 내장 음성 출력 ──────────────────────
-    function speak(text) {
-      if (!('speechSynthesis' in window)) {
-        alert("이 브라우저는 음성 출력을 지원하지 않습니다.");
-        return;
+    recognition.onerror = (event) => {
+      if (event.error === "no-speech" || event.error === "aborted") return;
+      if (event.error === "not-allowed" || event.error === "service-not-allowed") {
+        resultEl.textContent = "마이크 권한을 허용해야 대화할 수 있습니다.";
+        resultEl.className = "error";
+        sessionActive = false; setSessionUI(false);
       }
-      if (!text || !text.trim()) return;
-      window.speechSynthesis.cancel();        // 이전 음성 중단 후 새로 읽기
-      const utter = new SpeechSynthesisUtterance(text);
-      utter.lang = "ko-KR";                   // 한국어 목소리
-      utter.rate = 1.0;                       // 속도 (0.5~2)
-      window.speechSynthesis.speak(utter);
-    }
+    };
 
-    function stopSpeak() {
-      window.speechSynthesis.cancel();
-    }
+    recognition.onend = () => {
+      if (sessionActive && !processing && !speaking) {
+        if (currentText) committedBase = currentText + " ";
+        try { recognition.start(); } catch (e) {}
+      }
+    };
 
-    document.getElementById("speak-btn").addEventListener("click", () => {
-      speak(document.getElementById("ask-result").textContent);
+    micBtn.addEventListener("click", () => {
+      if (!window.isSecureContext) {
+        resultEl.textContent = "마이크는 HTTPS에서만 동작합니다."; resultEl.className = "error"; return;
+      }
+      if (sessionActive) {
+        sessionActive = false; processing = false; speaking = false;
+        clearSilenceTimer();
+        try { recognition.stop(); } catch (e) {}
+        window.speechSynthesis.cancel();
+        setSessionUI(false); renderTranscript("", "");
+      } else {
+        sessionActive = true; processing = false; speaking = false;
+        currentText = ""; committedBase = ""; lastLen = 0; askTextEl.value = "";
+        setSessionUI(true); renderTranscript("", "");
+      }
+      if (sessionActive) { try { recognition.start(); } catch (e) {} }
     });
-    document.getElementById("stop-speak-btn").addEventListener("click", stopSpeak);
 
-    // ── STT: 음성을 녹음해서 서버로 보내고, 서버(Gemini)가 텍스트로 변환 ──
-    // (브라우저 내장 SpeechRecognition 대신 백엔드에서 처리 — 서버가 이미
-    // 연 /ws/camera 웹소켓을 그대로 재사용한다: 완결된 WebM/Opus 클립 하나를
-    // 통째로 보내면, 서버가 EBML 헤더로 오디오임을 알아채 STT를 수행하고
-    // 같은 소켓으로 {"type":"transcript", ...}를 돌려준다.)
-    const micBtn = document.getElementById("mic-btn");
-    let mediaRecorder = null;
-    let recordedChunks = [];
-    let listening = false;
+    setSessionUI(false);
+  }
 
-    function setListening(isListening) {
-      listening = isListening;
-      micBtn.classList.toggle("listening", isListening);
-      micBtn.textContent = isListening ? "🎤 Recording... (tap to stop)" : "🎤";
+  /* =====================================================================
+     4. 문서 스캔 / 파싱 — 라이브 프레임을 통째로 Gemini에 보내 본문을 읽는다.
+        문서 윤곽 검출·선택 단계는 없다 — 지금 화면에 보이는 프레임을 그대로
+        파싱한다(Gemini가 배경의 잡다한 글자는 무시하고 본문만 읽도록
+        GeminiConst.DOC_PARSE_INSTRUCTION에서 지시한다).
+     ===================================================================== */
+  const scanBtn    = document.getElementById("scan-btn");
+  const scanStatus = document.getElementById("scan-status");
+
+  /** 지금 라이브로 들어오는 프레임을 Gemini에 보내 본문 텍스트를 받아 시트에
+   * 표시한다. 성공하면 읽은 텍스트를, 실패하면 null을 돌려준다. */
+  async function fetchDocText() {
+    docSheet.classList.add("show");
+    docResult.textContent = "문서를 읽는 중...";
+    docResult.className = "";
+    scanStatus.textContent = "스캔 중..."; scanStatus.className = "";
+    try {
+      const res = await fetch("/api/scan/parse", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ mode: "text" }),
+      });
+      const data = await res.json();
+      scanStatus.textContent = "";
+      if (!res.ok || data.error) {
+        docResult.textContent = data.error || ("오류 " + res.status);
+        docResult.className = "error";
+        return null;
+      }
+      docResult.textContent = data.text;
+      docResult.className = "";
+      lastDocText = data.text;
+      return data.text;
+    } catch (e) {
+      scanStatus.textContent = "";
+      docResult.textContent = "요청 실패";
+      docResult.className = "error";
+      return null;
+    }
+  }
+
+  /** '스캔' — 라이브 프레임을 읽어 표시하고 그 내용을 TTS로 읽어준다.
+   * 음성 대화 세션 중이면 인식을 잠깐 멈췄다가, 다 읽은 뒤 자동으로 다시 듣는다
+   * (speakThenResume이 세션 여부를 알아서 처리한다). */
+  async function scanAndRead() {
+    processing = true; clearSilenceTimer();
+    try { if (recognition) recognition.stop(); } catch (e) {}
+    const text = await fetchDocText();
+    speakThenResume(text || "문서에서 읽을 글자를 찾지 못했어요");
+  }
+
+  scanBtn.addEventListener("click", scanAndRead);
+
+  /* =====================================================================
+     5. 문서 요약
+     ===================================================================== */
+  const docSheet   = document.getElementById("doc-sheet");
+  const docResult  = document.getElementById("doc-parse-result");
+  const docSummaryBtn = document.getElementById("doc-summary-btn");
+  let lastDocText = "";
+
+  document.getElementById("sheet-close").addEventListener("click", () => docSheet.classList.remove("show"));
+
+  /** 읽어둔 문서 글을 짧게 요약하고 소리 내어 읽는다. */
+  docSummaryBtn.addEventListener("click", async () => {
+    if (!lastDocText) {
+      docSheet.classList.add("show");
+      docResult.textContent = "먼저 문서를 파싱하세요.";
+      docResult.className = "error";
+      return;
+    }
+    docSheet.classList.add("show");
+    docResult.textContent = "요약 중...";
+    try {
+      const res = await fetch("/api/ask", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text: lastDocText, mode: "summary" }),
+      });
+      const data = await res.json();
+      if (!res.ok || data.error) { docResult.textContent = data.error || ("오류 " + res.status); docResult.className = "error"; }
+      else { docResult.textContent = data.answer; lastDocText = data.answer; speak(data.answer); }
+    } catch (e) { docResult.textContent = "요청 실패"; docResult.className = "error"; }
+  });
+
+  document.getElementById("doc-speak-btn").addEventListener("click", () => speak(docResult.textContent));
+
+  /* =====================================================================
+     6. 음성 명령 — 말한 내용이 기능과 맞으면 질문 대신 그 동작을 실행한다.
+     ===================================================================== */
+  function normCmd(s) { return s.replace(/\s+/g, "").toLowerCase(); }
+
+  /** 명령 실행: 인식을 잠깐 멈추고 → 동작 → 안내 음성 → 다시 듣기. */
+  function runCommand(actionFn, sayText) {
+    processing = true; clearSilenceTimer();
+    try { recognition.stop(); } catch (e) {}
+    try { if (actionFn) actionFn(); } catch (e) {}
+    resultEl.textContent = sayText || "명령 실행"; resultEl.className = "";
+    if (sayText) speakThenResume(sayText); else resumeListening();
+  }
+
+  /** 명령이면 실행하고 true, 아니면 false(→ 평소대로 Gemini 질문). */
+  function handleVoiceCommand(qRaw) {
+    const q = normCmd(qRaw);
+
+    // 일정/캘린더 명령이면 먼저 처리 (예: "오늘 일정 읽어줘"가 아래 '읽어줘' 재생과
+    // 겹치지 않도록 앞에 둔다).
+    if (handleCalendarCommand(qRaw)) return true;
+
+    // 조명 제어. '꺼/끄'를 '켜'보다 먼저 검사해야 한다 — "불 꺼줘"와 "불 켜줘"는
+    // 한 글자 차이라 순서를 바꾸면 서로를 잡아먹는다.
+    if (/불|조명|라이트|전등/.test(q)) {
+      if (/꺼|끄|소등/.test(q)) { runCommand(() => setLight("off"), "불 끌게요"); return true; }
+      if (/켜|키|점등/.test(q)) { runCommand(() => setLight("on"), "불 켤게요"); return true; }
     }
 
-    if (!window.MediaRecorder) {
-      micBtn.disabled = true;
-      micBtn.textContent = "🎤 (이 브라우저 미지원)";
-    } else {
-      micBtn.addEventListener("click", () => {
-        if (listening) {
-          mediaRecorder.stop(); // onstop below sends the clip and resets state
-          return;
+    // 대화 종료 ("그만"보다 먼저 검사)
+    if (q.includes("대화종료") || q.includes("대화끝") || (q.includes("대화") && q.includes("그만"))
+        || q.includes("그만들어") || q.includes("듣기종료") || q.includes("잘있어")) {
+      runCommand(() => {
+        sessionActive = false; clearSilenceTimer();
+        window.speechSynthesis.cancel(); setSessionUI(false);
+      }, "대화를 종료할게요");
+      return true;
+    }
+    // 스캔 — 라이브 화면을 읽어 TTS로 들려준다.
+    if (q.includes("스캔")
+        || (q.includes("문서") && (q.includes("읽") || q.includes("파싱") || q.includes("찍") || q.includes("인식")))) {
+      scanAndRead(); return true;
+    }
+    // 카메라 끄기 ("켜기"보다 먼저: '꺼/끄'와 '켜'를 구분하기 위해)
+    if ((q.includes("카메라") || q.includes("촬영") || q.includes("스트리밍")) &&
+        (q.includes("꺼") || q.includes("끄") || q.includes("중지") || q.includes("정지") || q.includes("오프"))) {
+      runCommand(() => stopCamera(), "카메라 끌게요"); return true;
+    }
+    // 카메라 켜기
+    if ((q.includes("카메라") || q.includes("촬영") || q.includes("스트리밍")) &&
+        (q.includes("시작") || q.includes("켜") || q.includes("틀") || q.includes("실행") || q.includes("연결"))) {
+      runCommand(() => { if (!captureTimer) start(); }, "카메라 켤게요"); return true;
+    }
+    // 모드 전환
+    if (q.includes("요약") && (q.includes("모드") || q.includes("바꿔") || q.includes("전환"))) {
+      runCommand(() => { document.getElementById("ask-mode").value = "summary"; }, "요약 모드로 바꿀게요"); return true;
+    }
+    if ((q.includes("채팅") || q.includes("일반") || q.includes("대화")) && (q.includes("모드") || q.includes("바꿔") || q.includes("전환"))) {
+      runCommand(() => { document.getElementById("ask-mode").value = "chat"; }, "대화 모드로 바꿀게요"); return true;
+    }
+    // 마지막 답 다시 읽기
+    if (q.includes("다시읽") || q.includes("읽어줘") || q.includes("다시말") || q.includes("한번더")) {
+      const last = (resultEl.textContent || "").trim();
+      runCommand(null, last || "아직 읽을 답이 없어요"); return true;
+    }
+    // 말하기 중단
+    if (q.includes("그만") || q.includes("멈춰") || q.includes("조용") || q.includes("정지") || q.includes("스톱") || q.includes("stop")) {
+      runCommand(() => stopSpeak(), ""); return true;
+    }
+    return false;
+  }
+
+  /* =====================================================================
+     6.5 캘린더 / 일정 — 날짜별 일정 추가·삭제·조회 + 오늘 날짜/요일 안내.
+         날짜 해석("오늘/내일/다음 주 화요일/3월 5일")은 이 기기(폰)의 시계로
+         여기서 YYYY-MM-DD로 바꾸고, 서버(/api/calendar/*)는 확정된 날짜만
+         저장·조회하는 순수 저장소로 둔다. 음성·수동 UI 둘 다 같은 API를 쓴다.
+     ===================================================================== */
+  const WEEKDAYS = ["일", "월", "화", "수", "목", "금", "토"];
+  const REL_WORDS = new Set(["오늘", "내일", "내일모레", "낼모레", "낼", "모레", "글피",
+                             "어제", "그저께", "그제", "엊그제"]);
+
+  function atMidnight(d) { return new Date(d.getFullYear(), d.getMonth(), d.getDate()); }
+  function addDays(d, n) { const x = new Date(d); x.setDate(x.getDate() + n); return x; }
+  function fmtISO(d) {
+    return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0")
+         + "-" + String(d.getDate()).padStart(2, "0");
+  }
+  function fmtKor(d) { return (d.getMonth() + 1) + "월 " + d.getDate() + "일"; }
+  function korLabel(d) { return fmtKor(d) + " " + WEEKDAYS[d.getDay()] + "요일"; }
+  function isoToDate(iso) { const [y, m, d] = iso.split("-").map(Number); return new Date(y, m - 1, d); }
+  /** 받침 유무로 은/는을 붙인다. */
+  function josaEunNeun(w) {
+    const code = w.charCodeAt(w.length - 1);
+    const batchim = code >= 0xAC00 && code <= 0xD7A3 && (code - 0xAC00) % 28 !== 0;
+    return w + (batchim ? "은" : "는");
+  }
+
+  // ---- 자연어 → 날짜/시간 파싱 (Node로 사전 검증한 로직) ----
+  const REL = [["내일모레", 2], ["낼모레", 2], ["모레", 2], ["글피", 3],
+               ["내일", 1], ["낼", 1], ["오늘", 0],
+               ["그저께", -2], ["그제", -2], ["엊그제", -2], ["어제", -1]];
+  const WD_NAME = { "일": 0, "월": 1, "화": 2, "수": 3, "목": 4, "금": 5, "토": 6 };
+
+  /** raw에서 날짜 표현 하나를 찾아 상세 객체로. 없으면 null. */
+  function parseDatePhrase(raw, now) {
+    const today = atMidnight(now || new Date());
+    const info = (d, match) => ({
+      date: d, iso: fmtISO(d), label: korLabel(d),
+      dateOnly: fmtKor(d), weekday: WEEKDAYS[d.getDay()], match,
+    });
+
+    for (const [word, off] of REL) if (raw.includes(word)) return info(addDays(today, off), word);
+
+    let m = raw.match(/(\d{1,2})\s*월\s*(\d{1,2})\s*일/);
+    if (m) {
+      const mo = +m[1], day = +m[2];
+      if (mo >= 1 && mo <= 12 && day >= 1 && day <= 31) {
+        let d = new Date(today.getFullYear(), mo - 1, day);
+        if (d < today) d = new Date(today.getFullYear() + 1, mo - 1, day);
+        return info(d, m[0]);
+      }
+    }
+    m = raw.match(/(다음\s*주|담주|이번\s*주|이번주|돌아오는)?\s*([일월화수목금토])\s*요일/);
+    if (m) {
+      const nextWeek = /다음|담|돌아오는/.test(m[1] || "");
+      let delta = (WD_NAME[m[2]] - today.getDay() + 7) % 7;
+      if (nextWeek) delta += 7;
+      return info(addDays(today, delta), m[0]);
+    }
+    m = raw.match(/(\d{1,2})\s*일/);
+    if (m) {
+      const day = +m[1];
+      if (day >= 1 && day <= 31) {
+        let d = new Date(today.getFullYear(), today.getMonth(), day);
+        if (d < today) d = new Date(today.getFullYear(), today.getMonth() + 1, day);
+        return info(d, m[0]);
+      }
+    }
+    return null;
+  }
+
+  /** "이번 주"/"다음 주"(요일 없이) → {from,to,label}. 없으면 null. */
+  function parseWeekRange(raw, now) {
+    const today = atMidnight(now || new Date());
+    const nextWeek = /다음\s*주|담주/.test(raw);
+    const thisWeek = /이번\s*주|이번주|금주/.test(raw);
+    if (!nextWeek && !thisWeek) return null;
+    const dow = (today.getDay() + 6) % 7;           // 월=0 … 일=6
+    let monday = addDays(today, -dow);
+    if (nextWeek) monday = addDays(monday, 7);
+    return { from: fmtISO(monday), to: fmtISO(addDays(monday, 6)),
+             label: nextWeek ? "다음 주" : "이번 주" };
+  }
+
+  // 한글 고유어 시각("세 시" = 3시). STT가 숫자 대신 한글로 줄 때를 위해.
+  const NATIVE_H = { "한": 1, "두": 2, "세": 3, "네": 4, "다섯": 5, "여섯": 6,
+                     "일곱": 7, "여덟": 8, "아홉": 9, "열": 10, "열한": 11, "열두": 12 };
+  const _HWORD = "열두|열한|열|아홉|여덟|일곱|여섯|다섯|네|세|두|한";  // 긴 것 먼저
+  const _TIME_RE = new RegExp(
+    "(오전|오후|아침|저녁|밤|낮)?\\s*(\\d{1,2}|" + _HWORD + ")\\s*시"
+    + "(\\s*(\\d{1,2})\\s*분|\\s*반)?\\s*(에다가|에|쯤)?");
+
+  /** raw에서 시간 표현을 뽑아 {hhmm, match} 또는 null. */
+  function parseTimePhrase(raw) {
+    const m = raw.match(_TIME_RE);
+    if (!m) return null;
+    let h = /^\d/.test(m[2]) ? +m[2] : NATIVE_H[m[2]];
+    let min = 0;
+    if (m[3]) min = /반/.test(m[3]) ? 30 : +m[4];
+    if (/오후|저녁|밤/.test(m[1] || "") && h < 12) h += 12;
+    if (/오전|아침/.test(m[1] || "") && h === 12) h = 0;
+    if (h == null || h > 23 || min > 59) return null;
+    return { hhmm: String(h).padStart(2, "0") + ":" + String(min).padStart(2, "0"), match: m[0] };
+  }
+
+  // 제목에서 걷어낼 꼬리 명령 동사.
+  //  A등급: 어미 없이도 명령(제목 명사로 거의 안 쓰임). B등급: 동사 어미 있을 때만.
+  const _VA = "추가|등록|삭제|제거|취소|없애|기록";
+  const _VB = "예약|저장|잡아|넣어|빼|지워";
+  const _VE = "해\\s*주세요|해\\s*줘|해\\s*주라|해라|할래|하기|해|줘|주라";
+  const _TAIL = new RegExp("\\s*(을|를|좀)?\\s*(?:(?:" + _VA + ")(?:\\s*(?:" + _VE + "))?"
+                           + "|(?:" + _VB + ")\\s*(?:" + _VE + "))\\s*$");
+  const _TAIL_END = new RegExp("\\s*(?:" + _VE + ")\\s*$");
+
+  /** raw에서 날짜/시간/명령어/조사를 걷어내고 남은 일정 제목. */
+  function extractTitle(raw, dateMatch, timeMatch) {
+    let t = raw;
+    if (dateMatch) t = t.replace(dateMatch, " ");
+    if (timeMatch) t = t.replace(timeMatch, " ");
+    t = t.replace(/\s+/g, " ").trim();
+    let prev;
+    do { prev = t; t = t.replace(_TAIL, "").trim(); } while (t !== prev && t.length);
+    t = t.replace(_TAIL_END, "").trim();
+    t = t.replace(/^(에다가|에다|에|일정으로|일정에|일정|스케줄에|스케줄|약속으로)\s+/, "").trim();
+    t = t.replace(/\s*(에|은|는|을|를|이|가)\s*$/, "").trim();
+    return t;
+  }
+
+  /** "15:00" → "오후 3시", "09:30" → "오전 9시 30분" (음성 안내용). */
+  function timeToSpoken(hhmm) {
+    const [H, M] = hhmm.split(":").map(Number);
+    let h12 = H % 12; if (h12 === 0) h12 = 12;
+    return (H < 12 ? "오전 " : "오후 ") + h12 + "시" + (M ? " " + M + "분" : "");
+  }
+  /** 이벤트 한 건을 음성 문구로. withDate면 앞에 날짜를 붙인다. */
+  function eventPhrase(e, withDate) {
+    let s = "";
+    if (withDate) s += fmtKor(isoToDate(e.date)) + " ";
+    if (e.time) s += timeToSpoken(e.time) + " ";
+    return (s + e.title).trim();
+  }
+
+  // ---- 일정 화면으로 넘기기 ----
+  // 달력은 이 페이지의 모달이 아니라 전용 화면(/calendar)이다. 좁은 폰 화면에서
+  // 한 달치 달력과 카메라 영상을 같은 화면에 같이 놓으면 둘 다 작아지기만 해서,
+  // 달력이 화면 전체를 쓰도록 페이지를 나눴다.
+  //
+  // 넘어가는 순간 이 페이지가 내려가므로 카메라와 웹소켓 세션도 함께 끊긴다 —
+  // 돌아오면 자동으로 다시 켜진다(맨 아래 9번 섹션). 일정 화면에 머무는 동안은
+  // 팔이 영상을 받지 못해 추적이 멈추므로, 오래 머물 화면이 아니라는 전제다.
+  function calOpen() { location.href = "/calendar"; }
+
+  // 아래 두 개는 모달 시절의 흔적이다. 음성 명령 쪽(voiceAddEvent 등)이 계속
+  // 부르고 있어서, 그쪽 코드를 건드리지 않으려고 이름만 남겨 뒀다.
+  function calClose() { /* 전용 화면이라 여기서 닫을 것이 없다 */ }
+  function calRenderIfOpen() { /* 목록은 일정 화면이 열릴 때 스스로 불러온다 */ }
+
+  // ---- 음성으로 일정 추가/삭제/조회 (fetch 후 안내 음성 → 다시 듣기) ----
+  async function voiceAddEvent(dp, tp, title) {
+    processing = true; clearSilenceTimer();
+    try { recognition.stop(); } catch (e) {}
+    try {
+      const res = await fetch("/api/calendar/events", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ date: dp.iso, title, time: tp ? tp.hhmm : null }) });
+      const data = await res.json();
+      const msg = (!res.ok || data.error) ? "일정을 추가하지 못했어요"
+        : dp.dateOnly + (tp ? " " + timeToSpoken(tp.hhmm) : "") + " " + title + " 추가했어요";
+      resultEl.textContent = msg; resultEl.className = res.ok ? "" : "error";
+      calRenderIfOpen(); speakThenResume(msg);
+    } catch (e) { resultEl.textContent = "추가 요청 실패"; resultEl.className = "error"; resumeListening(); }
+  }
+  async function voiceRemoveEvent(dp, title) {
+    processing = true; clearSilenceTimer();
+    try { recognition.stop(); } catch (e) {}
+    const body = {};
+    if (dp) body.date = dp.iso;
+    if (title) body.query = title;
+    try {
+      const res = await fetch("/api/calendar/delete", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body) });
+      const data = await res.json();
+      let msg;
+      if (!res.ok || data.error) msg = "일정을 삭제하지 못했어요";
+      else if (!data.count) msg = (dp ? dp.dateOnly + "에 " : "") + (title || "해당") + " 일정을 못 찾았어요";
+      else msg = (data.count === 1 && data.removed[0])
+        ? data.removed[0].title + " 일정을 지웠어요"
+        : data.count + "개 일정을 지웠어요";
+      resultEl.textContent = msg; resultEl.className = res.ok ? "" : "error";
+      calRenderIfOpen(); speakThenResume(msg);
+    } catch (e) { resultEl.textContent = "삭제 요청 실패"; resultEl.className = "error"; resumeListening(); }
+  }
+  async function voiceQueryEvents(spec) {
+    processing = true; clearSilenceTimer();
+    try { recognition.stop(); } catch (e) {}
+    const url = spec.date ? "/api/calendar/events?date=" + spec.date
+                          : "/api/calendar/events?from=" + spec.from + "&to=" + spec.to;
+    try {
+      const res = await fetch(url);
+      const evs = (await res.json()).events || [];
+      let msg;
+      if (!evs.length) msg = spec.label + "에 일정이 없어요";
+      else {
+        const parts = evs.slice(0, 6).map(e => eventPhrase(e, !spec.date));
+        msg = spec.label + "에 일정이 " + evs.length + "개 있어요. " + parts.join(", ");
+        if (evs.length > 6) msg += " 그리고 몇 건 더 있어요";
+      }
+      resultEl.textContent = msg; resultEl.className = "";
+      calRenderIfOpen(); speakThenResume(msg);
+    } catch (e) { resultEl.textContent = "일정을 불러오지 못했어요"; resultEl.className = "error"; resumeListening(); }
+  }
+
+  /** 오늘/그 날짜의 요일·날짜를 말해준다(며칠/무슨 요일). */
+  function speakDateInfo(dp) {
+    const msg = REL_WORDS.has(dp.match)
+      ? josaEunNeun(dp.match) + " " + dp.dateOnly + " " + dp.weekday + "요일이에요"
+      : josaEunNeun(dp.dateOnly) + " " + dp.weekday + "요일이에요";
+    runCommand(null, msg);
+  }
+
+  /** 일정 관련 명령이면 실행하고 true, 아니면 false(→ 평소대로 Gemini). */
+  function handleCalendarCommand(qRaw) {
+    const raw = qRaw.trim();
+    const q = normCmd(qRaw);
+
+    // 캘린더 열기 / 닫기
+    if ((q.includes("캘린더") || q.includes("달력")) &&
+        (q.includes("열") || q.includes("보여") || q.includes("띄워") || q.includes("켜"))) {
+      runCommand(() => calOpen(), "일정 화면 열게요"); return true;
+    }
+    if ((q.includes("캘린더") || q.includes("달력")) && (q.includes("닫") || q.includes("꺼"))) {
+      runCommand(null, "일정 화면에서 뒤로가기를 눌러 주세요"); return true;
+    }
+
+    // 오늘 며칠 / 무슨 요일 / 날짜
+    if (q.includes("며칠") || q.includes("몇일") || (q.includes("무슨") && q.includes("요일"))
+        || (q.includes("무슨") && q.includes("날")) || ((q.includes("오늘") || q.includes("내일")) && q.includes("날짜"))) {
+      speakDateInfo(parseDatePhrase(raw) || parseDatePhrase("오늘")); return true;
+    }
+
+    const isAdd = /(추가|등록|기록|잡아|넣어)/.test(q) || /(예약|저장)해/.test(q);
+    const isRemove = /(삭제|제거|취소|지워|없애|빼줘|빼기)/.test(q);
+    const scheduleKW = /(일정|스케줄|스케쥴|약속|계획)/.test(q);
+    const dp = parseDatePhrase(raw);
+
+    if (isAdd) {
+      if (!dp) { runCommand(null, "언제로 추가할까요? 날짜를 같이 말해주세요"); return true; }
+      const tp = parseTimePhrase(raw);
+      const title = extractTitle(raw, dp.match, tp && tp.match);
+      if (!title) { runCommand(null, "무슨 일정인지 잘 못 들었어요. 다시 말해줄래요?"); return true; }
+      voiceAddEvent(dp, tp, title); return true;
+    }
+    if (isRemove && (scheduleKW || dp)) {
+      const tp = parseTimePhrase(raw);
+      const title = extractTitle(raw, dp && dp.match, tp && tp.match);
+      if (!dp && !title) { runCommand(null, "어떤 일정을 지울지 못 들었어요"); return true; }
+      voiceRemoveEvent(dp, title); return true;
+    }
+    if (scheduleKW && dp) { voiceQueryEvents({ date: dp.iso, label: dp.label }); return true; }
+    if (scheduleKW) {
+      const wr = parseWeekRange(raw);
+      if (wr) { voiceQueryEvents({ from: wr.from, to: wr.to, label: wr.label }); return true; }
+    }
+    return false;
+  }
+
+  /* =====================================================================
+     7. 제스처 명령 — 가위바위보가 확정되면 서버가 내려보내는 동작.
+        [병합] 판정 자체는 서버(perception/gesture.py)가 하지만, 그 입력은 아래
+        10번 섹션에서 이 폰이 올려보낸 손 랜드마크다 — 즉 인식은 폰, 판정은
+        서버, 실행은 다시 폰이다. 카메라·마이크·화면이 여기 있으므로 실행은
+        폰일 수밖에 없고, /ws/camera로 {type:"gesture", action:...} 한 줄이
+        내려오면 그대로 수행한다.
+        서버 쪽에서 이미 "같은 모양 N프레임 유지 + 쿨다운"으로 걸러 보내므로
+        여기서는 중복 방지를 다시 하지 않는다.
+     ===================================================================== */
+  /** 조명을 켜고 끈다.
+      파이(http://...:5000)를 여기서 직접 부르면 안 된다 — 이 페이지는 HTTPS라
+      브라우저가 혼합 콘텐츠(mixed content)로 차단한다. 메인 서버가 대신 파이를
+      호출하므로 여기서는 항상 같은 출처의 /api/light 를 부른다. */
+  async function setLight(state) {
+    try {
+      const res = await fetch("/api/light", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ state }),
+      });
+      const data = await res.json();
+      if (!res.ok || data.error) {
+        resultEl.textContent = "조명 제어 실패: " + (data.error || res.status);
+        resultEl.className = "error";
+        return false;
+      }
+      return true;
+    } catch (e) {
+      resultEl.textContent = "조명 요청이 실패했어요";
+      resultEl.className = "error";
+      return false;
+    }
+  }
+
+  document.getElementById("light-on-btn").addEventListener("click", () => setLight("on"));
+  document.getElementById("light-off-btn").addEventListener("click", () => setLight("off"));
+
+  const gestureBtn = document.getElementById("gesture-btn");
+  let gestureEnabled = true;
+
+  gestureBtn.addEventListener("click", () => {
+    gestureEnabled = !gestureEnabled;
+    gestureBtn.classList.toggle("on", gestureEnabled);
+    gestureBtn.textContent = gestureEnabled ? "제스처 켬" : "제스처 끔";
+  });
+
+  /** 상태줄에 잠깐 안내를 띄우고 원래 문구로 되돌린다. */
+  function gestureNote(text) {
+    setStatus(text, "ok");
+    setTimeout(() => { if (ws && ws.readyState === WebSocket.OPEN) setStatus("서버 연결됨", "ok"); }, 2500);
+  }
+
+  /** 대화 세션을 켠다. 이미 켜져 있으면 아무것도 하지 않는다(토글이 아니다). */
+  function startVoiceSession() {
+    if (!SpeechRecognition || micBtn.disabled || sessionActive) return false;
+    if (!window.isSecureContext) return false;
+    micBtn.click();   // 세션 시작 로직을 한 곳에만 두기 위해 버튼을 그대로 누른다
+    return true;
+  }
+
+  function handleGestureCommand(action) {
+    if (!gestureEnabled) return;
+
+    // 안내 음성은 항상 runCommand/speakThenResume를 거친다. 대화 세션이 켜져
+    // 있을 때 그냥 speak()로 말하면 그 소리가 마이크로 다시 들어가 자기 말을
+    // 질문으로 인식해버리는데, 이 두 함수는 speaking 플래그로 그동안의 인식
+    // 결과를 버리고 다 읽은 뒤 깨끗한 상태로 듣기를 재개한다.
+    if (action === "scan") {                     // 가위
+      if (!captureTimer) return;                 // 카메라가 꺼져 있으면 무시
+      gestureNote("가위 — 스캔");
+      scanAndRead();
+
+    } else if (action === "voice") {             // 바위
+      if (sessionActive) { gestureNote("바위 — 이미 듣는 중"); return; }
+      if (!startVoiceSession()) { gestureNote("음성 인식을 쓸 수 없습니다"); return; }
+      gestureNote("바위 — 대화 시작");
+      speakThenResume("네, 말씀하세요");
+
+    } else if (action === "camera_off") {        // 보
+      if (!captureTimer) return;
+      gestureNote("보 — 카메라 끄기");
+      runCommand(() => stopCamera(), "카메라 끌게요");
+    }
+  }
+
+  /* =====================================================================
+     8. 페이지를 열면 카메라를 바로 켠다.
+        권한 프롬프트가 사용자 동작을 요구하는 브라우저에서는 실패하므로,
+        그때는 덮개의 "카메라 켜기" 버튼으로 넘어간다.
+     ===================================================================== */
+  setCameraState(false, "카메라를 켜는 중입니다");
+  window.addEventListener("load", start);
+</script>
+
+<script type="module">
+  /* =====================================================================
+     9. 손/얼굴/몸 인식 — 휴대폰에서 직접 MediaPipe Tasks Vision
+        (HandLandmarker + FaceLandmarker + PoseLandmarker)을 돌려서
+        좌표만(이미지 자체가 아니라) 웹소켓으로 보낸다.
+
+        원래는 서버(컴퓨터)가 얼굴/손/몸(어깨, 얼굴 인식 실패 시 폴백) 인식을
+        전부 mediapipe(Python)로 처리했는데, 컴퓨터 하나가 여러 모델 추론 +
+        matplotlib 3D 렌더링 + 하드웨어 제어까지 매 프레임 다 하려니 폰이
+        실제로 보내는 프레임레이트(~20fps, 위 FRAME_INTERVAL_MS)를 못 따라가서
+        로봇 반응이 느려지고 뚝뚝 끊겼다. 그래서 손 → 얼굴 → 몸 순서로 셋 다
+        폰이 직접(로컬) 하도록 옮겼다 — 얼굴은 그것 말고도 서버가 받는
+        프레임이 JPEG 압축 + 다운스케일을 거쳐 화질이 떨어지는 바람에 인식
+        자체가 잘 안 되는 문제도 있었는데, 압축 전 원본 영상에서 직접
+        인식하면 그 문제도 같이 없어진다. 서버(컴퓨터)는 이제 셋 중 어느
+        것도 모델 추론을 하지 않는다 — perception/hand_tracker.py,
+        perception/face_tracker.py, perception/body_tracker.py,
+        src/api/camera.py 참고. mediapipe(Python)는 더 이상 이 프로젝트의
+        의존성이 아니다.
+
+        [병합] 손 랜드마크는 서버에서 두 갈래로 쓰인다:
+          ① perception/follow_controller.py — 팔이 손을 따라가는 추종
+          ② perception/gesture.py           — 가위바위보 판정(위 8번 섹션)
+        아래 HAND_TRACKING_ENABLED는 그 둘의 **입력 자체**(랜드마크 전송)를
+        끄는 스위치다 — false면 손 추종과 제스처가 함께 꺼진다. 팔이 손을
+        따라가는 것"만" 끄고 싶다면(가위바위보는 계속 쓰고 싶을 때) 여기가
+        아니라 서버 쪽 `fundamental.const.FollowControllerConst.HAND_FOLLOW_ENABLED`를
+        False로 두는 게 맞다 — 그러면 손 랜드마크는 계속 전송/인식되어
+        제스처는 그대로 동작하고, `FollowController`만 그 위치로 팔을
+        움직이지 않는다. 얼굴/몸 랜드마크는 팔 추종에만 쓰이므로
+        FACE_TRACKING_ENABLED/POSE_TRACKING_ENABLED는 독립적으로 켜고 끌 수
+        있다 — 다 꺼도 idle 두리번거림, 그리고 버튼·음성으로 하는 모든 웹
+        기능은 그대로 동작한다.
+
+        위 1번 섹션의 captureLoop()이 방향 보정(회전 + 좌우 미러링)까지 끝낸
+        캡처 캔버스(#capture)에 대고 셋 다 돌린다 — 서버가 받는 좌표계와
+        똑같은 기준이어야 랜드마크 좌표가 서버 쪽 깊이 추정/월드 변환과
+        어긋나지 않는다. 이 스크립트가 로드/초기화에 실패해도(오프라인, 구형
+        브라우저, CDN 접근 불가 등) 조용히 비활성으로 남는다 — 손/얼굴/몸
+        인식 없이 idle 두리번거림만으로 계속 동작한다(perception 패키지의
+        "부분 실패" 관례와 같은 정신). 셋의 초기화 실패는 서로 독립적이다 —
+        하나가 실패해도 나머지는 계속 시도한다.
+     ===================================================================== */
+  import {
+    HandLandmarker,
+    FaceLandmarker,
+    PoseLandmarker,
+    FilesetResolver,
+  } from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.21";
+
+  // 손 인식 자체(랜드마크 전송)를 통째로 끄는 스위치. false면 HandLandmarker
+  // 자체를 로드/초기화하지 않는다(폰 배터리/CPU도 아낌) — 이러면 손 추종과
+  // 제스처(가위바위보)가 함께 비활성이 된다(둘 다 같은 랜드마크를 쓰므로).
+  // "팔이 손을 따라가는 것만" 끄고 싶다면(제스처는 계속 쓰고 싶을 때) 여기를
+  // 건드리지 말고 서버 쪽 FollowControllerConst.HAND_FOLLOW_ENABLED를 끌 것 —
+  // 위 주석 참고.
+  const HAND_TRACKING_ENABLED = true;
+  // 얼굴 추적 스위치. false면 FaceLandmarker를 로드/초기화하지 않는다 —
+  // 서버는 "얼굴 없음"과 똑같이 동작해 몸/손 추종·idle 두리번거림만 남는다.
+  const FACE_TRACKING_ENABLED = true;
+  // 몸(어깨) 추적 스위치 — 얼굴 인식 실패(옆모습 등) 시 폴백. false면
+  // PoseLandmarker를 로드/초기화하지 않는다 — 서버는 "몸 없음"과 똑같이
+  // 동작해 얼굴이 안 보이면 곧장 손/idle로 넘어간다.
+  const POSE_TRACKING_ENABLED = true;
+
+  const TASKS_VISION_WASM_URL =
+    "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.21/wasm";
+  const HAND_MODEL_URL =
+    "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/latest/hand_landmarker.task";
+  const FACE_MODEL_URL =
+    "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/latest/face_landmarker.task";
+  // lite 변형을 쓴다 — 이건 얼굴 인식이 실패했을 때만 쓰는 폴백이라 최고
+  // 정확도보다 속도/배터리가 더 중요하다(서버측 BodyTracker가 쓰던
+  // model_complexity=0과 같은 이유, perception/body_tracker.py 참고).
+  const POSE_MODEL_URL =
+    "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/latest/pose_landmarker_lite.task";
+
+  // FaceTracker가 실제로 쓰는 랜드마크 인덱스 — MediaPipe 얼굴 모델의 표준
+  // 468/478점 위상에서 코끝 근처(1)와 양쪽 눈 바깥쪽 끝(33=오른쪽,
+  // 263=왼쪽)이다. fundamental.const.FaceTrackerConst와 반드시 맞춰야
+  // 한다(둘 중 하나만 바꾸면 서버 깊이 추정이 엉뚱한 랜드마크를 쓰게 된다).
+  // 468점 전체를 보내지 않고 이 3개만 뽑아 보내는 이유는 대역폭 절약 —
+  // FaceTracker/FaceFollower가 필요로 하는 건 이 3점뿐이다.
+  const FACE_CENTER_LANDMARK = 1;
+  const FACE_LEFT_EYE_OUTER = 33;
+  const FACE_RIGHT_EYE_OUTER = 263;
+
+  // BodyTracker가 실제로 쓰는 랜드마크 인덱스 — mediapipe Pose 표준 33점
+  // 위상에서 양쪽 어깨다. fundamental.const.BodyTrackerConst와 반드시
+  // 맞춰야 한다(FACE_CENTER_LANDMARK 등과 같은 이유).
+  const POSE_LEFT_SHOULDER = 11;
+  const POSE_RIGHT_SHOULDER = 12;
+  // 어깨 랜드마크의 visibility(0~1)가 이보다 낮으면(다른 신체 부위/물체에
+  // 가려짐, 옆모습에서 반대쪽 어깨 등) 신뢰하지 않고 이번 프레임엔 몸을 아예
+  // 보내지 않는다 — fundamental.const.BodyTrackerConst.MIN_LANDMARK_VISIBILITY와
+  // 반드시 맞춰야 한다. Tasks Vision의 일부 버전은 visibility를 안 채우기도
+  // 하는데, 그때는 undefined로 남으므로 "실패 열림"(무조건 통과)으로 둔다 —
+  // 이 폴백 자체가 이미 얼굴 인식 실패 시에만 쓰이므로, 신뢰도 필터 없이
+  // 지나가는 쪽이 아예 몸 추종을 잃는 쪽보다 낫다.
+  const POSE_MIN_SHOULDER_VISIBILITY = 0.5;
+
+  let handLandmarker = null;
+  let handLandmarkerReady = false;
+  let faceLandmarker = null;
+  let faceLandmarkerReady = false;
+  let poseLandmarker = null;
+  let poseLandmarkerReady = false;
+
+  /** 지정한 실행 방식(GPU/CPU)으로 HandLandmarker 인스턴스를 만든다. */
+  async function createHandLandmarker(vision, delegate) {
+    return HandLandmarker.createFromOptions(vision, {
+      baseOptions: { modelAssetPath: HAND_MODEL_URL, delegate },
+      numHands: 2,
+      runningMode: "VIDEO",
+    });
+  }
+
+  /** 지정한 실행 방식(GPU/CPU)으로 FaceLandmarker 인스턴스를 만든다. */
+  async function createFaceLandmarker(vision, delegate) {
+    return FaceLandmarker.createFromOptions(vision, {
+      baseOptions: { modelAssetPath: FACE_MODEL_URL, delegate },
+      numFaces: 1,
+      runningMode: "VIDEO",
+    });
+  }
+
+  /** 지정한 실행 방식(GPU/CPU)으로 PoseLandmarker 인스턴스를 만든다. */
+  async function createPoseLandmarker(vision, delegate) {
+    return PoseLandmarker.createFromOptions(vision, {
+      baseOptions: { modelAssetPath: POSE_MODEL_URL, delegate },
+      numPoses: 1,
+      runningMode: "VIDEO",
+    });
+  }
+
+  (async () => {
+    if (!HAND_TRACKING_ENABLED && !FACE_TRACKING_ENABLED && !POSE_TRACKING_ENABLED) return;
+    let vision;
+    try {
+      vision = await FilesetResolver.forVisionTasks(TASKS_VISION_WASM_URL);
+    } catch (e) {
+      console.warn("MediaPipe Tasks Vision runtime unavailable, hand/face/pose tracking disabled:", e);
+      return;
+    }
+
+    if (HAND_TRACKING_ENABLED) {
+      try {
+        try {
+          handLandmarker = await createHandLandmarker(vision, "GPU");
+        } catch (e) {
+          // 일부 브라우저/기기는 GPU delegate를 못 쓴다 — CPU로 재시도.
+          handLandmarker = await createHandLandmarker(vision, "CPU");
         }
-        const el = document.getElementById("ask-result");
-        if (!mediaStream || !ws || ws.readyState !== WebSocket.OPEN) {
-          el.textContent = "Tap \"Start camera + streaming\" first (grants mic access and opens the connection).";
-          el.className = "error";
-          return;
+        handLandmarkerReady = true;
+      } catch (e) {
+        console.warn("HandLandmarker unavailable, hand tracking disabled:", e);
+      }
+    }
+
+    if (FACE_TRACKING_ENABLED) {
+      try {
+        try {
+          faceLandmarker = await createFaceLandmarker(vision, "GPU");
+        } catch (e) {
+          faceLandmarker = await createFaceLandmarker(vision, "CPU");
         }
-        recordedChunks = [];
-        const audioOnlyStream = new MediaStream(mediaStream.getAudioTracks());
-        mediaRecorder = new MediaRecorder(audioOnlyStream, { mimeType: "audio/webm;codecs=opus" });
-        mediaRecorder.ondataavailable = (e) => {
-          if (e.data.size > 0) recordedChunks.push(e.data);
-        };
-        mediaRecorder.onstop = () => {
-          setListening(false);
-          const blob = new Blob(recordedChunks, { type: "audio/webm" });
-          ws.send(blob);
-          el.textContent = "transcribing...";
-          el.className = "";
-        };
-        mediaRecorder.start();
-        setListening(true);
+        faceLandmarkerReady = true;
+      } catch (e) {
+        console.warn("FaceLandmarker unavailable, face tracking disabled:", e);
+      }
+    }
+
+    if (POSE_TRACKING_ENABLED) {
+      try {
+        try {
+          poseLandmarker = await createPoseLandmarker(vision, "GPU");
+        } catch (e) {
+          poseLandmarker = await createPoseLandmarker(vision, "CPU");
+        }
+        poseLandmarkerReady = true;
+      } catch (e) {
+        console.warn("PoseLandmarker unavailable, body tracking disabled:", e);
+      }
+    }
+  })();
+
+  /** captureLoop()(1번 섹션, classic script)이 매 프레임 캡처 캔버스를 새로
+   * 그린 직후 호출한다. 손이 하나도 안 보여도(길이 0 배열) 그대로 보낸다 —
+   * 서버가 "지금은 손이 없다"를 곧바로 알아야 사라진 손 위치를 계속
+   * 붙잡고 있지 않는다(src/api/camera.py의 Camera.latest_hand_landmarks 참고). */
+  window.__sendHandLandmarks = function (canvasEl, wsConn) {
+    if (!handLandmarkerReady || !wsConn || wsConn.readyState !== WebSocket.OPEN) return;
+    let result;
+    try {
+      result = handLandmarker.detectForVideo(canvasEl, performance.now());
+    } catch (e) {
+      return;
+    }
+    const landmarks = (result && result.landmarks) || [];
+    wsConn.send(JSON.stringify({
+      type: "hand_landmarks",
+      landmarks: landmarks.map((hand) => hand.map((p) => [p.x, p.y, p.z])),
+    }));
+  };
+
+  /** 위와 같은 이유로 매 프레임 호출된다. 얼굴이 없어도 빈 배열을 그대로
+   * 보낸다(src/api/camera.py의 Camera.latest_face_landmarks 참고). 468/478개
+   * 전체 랜드마크가 아니라 FaceTracker가 실제로 쓰는 3개(코끝 + 양쪽 눈
+   * 바깥쪽 끝)만 이름 붙여 보낸다 — perception/face_tracker.py의
+   * process_landmarks()가 기대하는 모양과 정확히 맞아야 한다. */
+  window.__sendFaceLandmarks = function (canvasEl, wsConn) {
+    if (!faceLandmarkerReady || !wsConn || wsConn.readyState !== WebSocket.OPEN) return;
+    let result;
+    try {
+      result = faceLandmarker.detectForVideo(canvasEl, performance.now());
+    } catch (e) {
+      return;
+    }
+    const facesRaw = (result && result.faceLandmarks) || [];
+    const faces = facesRaw.map((lm) => ({
+      center: [lm[FACE_CENTER_LANDMARK].x, lm[FACE_CENTER_LANDMARK].y, lm[FACE_CENTER_LANDMARK].z],
+      left_eye_outer: [lm[FACE_LEFT_EYE_OUTER].x, lm[FACE_LEFT_EYE_OUTER].y, lm[FACE_LEFT_EYE_OUTER].z],
+      right_eye_outer: [lm[FACE_RIGHT_EYE_OUTER].x, lm[FACE_RIGHT_EYE_OUTER].y, lm[FACE_RIGHT_EYE_OUTER].z],
+    }));
+    wsConn.send(JSON.stringify({ type: "face_landmarks", faces }));
+  };
+
+  /** 위와 같은 이유로 매 프레임 호출된다(얼굴 인식 실패 폴백). 몸이 없어도
+   * 빈 배열을 그대로 보낸다(src/api/camera.py의 Camera.latest_body_landmarks
+   * 참고). 33점 전체가 아니라 BodyTracker가 실제로 쓰는 어깨 2개만 이름
+   * 붙여 보낸다 — perception/body_tracker.py의 process_landmarks()가
+   * 기대하는 모양과 정확히 맞아야 한다. 어깨 신뢰도(visibility)가 낮으면
+   * (옆모습 등, 서버 mediapipe Pose가 하던 판정과 같은 기준) 이 포즈 자체를
+   * 결과에서 뺀다 — 신뢰도 판정 자체가 폰으로 옮겨왔으므로 서버는 받은 걸
+   * 그대로 믿는다. */
+  window.__sendBodyLandmarks = function (canvasEl, wsConn) {
+    if (!poseLandmarkerReady || !wsConn || wsConn.readyState !== WebSocket.OPEN) return;
+    let result;
+    try {
+      result = poseLandmarker.detectForVideo(canvasEl, performance.now());
+    } catch (e) {
+      return;
+    }
+    const posesRaw = (result && result.landmarks) || [];
+    const bodies = [];
+    for (const lm of posesRaw) {
+      const left = lm[POSE_LEFT_SHOULDER];
+      const right = lm[POSE_RIGHT_SHOULDER];
+      if (!left || !right) continue;
+      const leftVisible = left.visibility === undefined || left.visibility >= POSE_MIN_SHOULDER_VISIBILITY;
+      const rightVisible = right.visibility === undefined || right.visibility >= POSE_MIN_SHOULDER_VISIBILITY;
+      if (!leftVisible || !rightVisible) continue;
+      bodies.push({
+        left_shoulder: [left.x, left.y, left.z],
+        right_shoulder: [right.x, right.y, right.z],
       });
     }
-  </script>
+    wsConn.send(JSON.stringify({ type: "body_landmarks", bodies }));
+  };
+</script>
 </body>
 </html>
