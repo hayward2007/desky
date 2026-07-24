@@ -1,21 +1,27 @@
-"""MediaPipe Pose로 사람의 몸(어깨)을 인식하고 로봇이 그 사람을 따라가게 하는
-얼굴 인식 폴백 모듈.
+"""휴대폰이 인식한 몸(어깨) 랜드마크를 3D 월드 좌표로 올리고, 로봇이 그 사람을
+따라가게 하는 얼굴 인식 폴백 모듈.
 
 얼굴 인식(perception.face_tracker)이 실패했을 때 — 옆모습, 고개를 돌린 경우,
 얼굴이 화면 가장자리에 살짝 걸친 경우 등 — 를 위한 폴백이다. 얼굴이 안 보여도
 어깨는 보이는 경우가 많다.
 
-얼굴/손과 달리 인식(모델 추론) 자체를 **서버**에서 한다 — 사용자가 명시적으로
-요청한 부분("사람 인식은 수신 받은 영상 정보로 백엔드에서 진행"). 다만 얼굴이
-인식되는 프레임에서는 이 모듈이 아예 호출되지 않으므로(`src/perception_loop.py`의
-`detect_bodies()` 참고), 이 프로젝트에서 서버가 하는 유일한 mediapipe 추론이
-상시 비용이 되지는 않는다 — 폰이 실제로 보내는 ~20fps 중 얼굴이 안 보이는
-프레임에서만 돈다.
+[이관] 처음엔 "사람 인식은 서버가 직접" 하도록 명시적으로 요청받아 서버
+mediapipe Pose로 돌았지만, 이후 얼굴/손과 같은 이유로(서버가 매 프레임 여러
+모델 추론 + matplotlib 3D 렌더링 + 하드웨어 제어를 다 하려니 폰이 실제로
+보내는 프레임레이트를 못 따라갔다 — perception.face_tracker/hand_tracker의
+이관 사유와 동일) 몸 인식도 휴대폰으로 옮겼다. `src/templates/mobile.html`이
+MediaPipe Tasks Vision PoseLandmarker를 돌려 양쪽 어깨 랜드마크(11=왼쪽,
+12=오른쪽)만 뽑아 `/ws/camera`로 보낸다
+(`{"type": "body_landmarks", "bodies": [{"left_shoulder", "right_shoulder"}]}`).
+어깨 신뢰도가 낮으면(가려짐 등) 휴대폰이 그 프레임의 몸 자체를 보내지 않는다
+— 그 판정도 휴대폰 쪽으로 옮겨갔으므로, 서버는 더 이상 mediapipe(Python)에
+의존하지 않는다(이 프로젝트에 남아있던 마지막 서버측 ML 추론이었다).
 
-perception.face_tracker/hand_tracker와 같은 구조: `BodyTracker`(인식 + 좌표변환
-+ 시각화)와 `BodyFollower`(몸 위치를 따라 로봇이 이동할 목표 계산)로 나뉘고,
-카메라 지오메트리(camera_frame)도 perception.camera_geometry를 공유한다.
-추종 알고리즘(화면 오프셋 → yaw 회전 + 높이 이동, EMA 평활)은
+perception.face_tracker/hand_tracker와 같은 구조: `BodyTracker`(좌표변환 +
+시각화 — 랜드마크는 이미 계산되어 들어온다)와 `BodyFollower`(몸 위치를 따라
+로봇이 이동할 목표 계산)로 나뉘고, 카메라 지오메트리(camera_frame,
+to_landmark)도 perception.camera_geometry를 그대로 공유한다. 추종 알고리즘
+(화면 오프셋 → yaw 회전 + 높이 이동, EMA 평활)은
 perception.face_tracker.FaceFollower와 동일한 설계 — 값이 뭘 의미하는지는
 fundamental.const.BodyFollowerConst 참고.
 
@@ -24,20 +30,26 @@ fundamental.const.BodyFollowerConst 참고.
 할지만 계산하고 실제 `arm_ctrl.goto_joints()` 호출은 호출부(`src/perception_loop.py`)가
 한다.
 
-의존성: mediapipe, opencv-python, numpy, matplotlib(3D 시각화, kinematics.simulate)
+의존성: opencv-python, numpy, matplotlib(3D 시각화, kinematics.simulate).
+mediapipe는 더 이상 이 모듈의 의존성이 아니다(인식이 클라이언트로 옮겨갔으므로).
 """
 
 import math
 
 from kinematics.urdf_loader import load_arm
 from fundamental.const import BodyFollowerConst, BodyTrackerConst, CameraGeometryConst
-from fundamental.logger import Logger
-from perception.camera_geometry import Landmark, camera_frame, clamp_xy
+from perception.camera_geometry import Landmark, camera_frame, clamp_xy, to_landmark
+
+# 몸 중심으로 쓰는 이름 — 랜드마크 자체는 2개뿐이지만(양쪽 어깨), 어느 게
+# 어느 건지 헷갈리지 않도록 이름으로 접근한다(휴대폰이 보내는 JSON도 같은
+# 이름의 키를 쓴다 — mobile.html 10번 섹션 참고).
+_LEFT_SHOULDER = "left_shoulder"
+_RIGHT_SHOULDER = "right_shoulder"
 
 
 class Body:
-    """인식된 사람 몸 하나. `landmarks`는 mediapipe Pose의 33개 랜드마크(원본
-    mediapipe 객체, 오버레이 그리기용), `depth`는 추정된 카메라~몸통 거리(m),
+    """인식된 사람 몸 하나. `landmarks`는 {"left_shoulder", "right_shoulder"}
+    두 개의 `camera_geometry.Landmark`, `depth`는 추정된 카메라~몸통 거리(m),
     `center`는 몸통 중심(양쪽 어깨 중점)의 월드 좌표, `screen_offset`은 그
     중심이 화면 정중앙 (0.5, 0.5)에서 얼마나 벗어났는지(dx, dy), 정규화 이미지
     좌표."""
@@ -50,99 +62,49 @@ class Body:
 
 
 class BodyTracker:
-    """카메라 프레임에서 사람 몸(어깨)을 찾아 3D 월드 좌표로 변환하는 객체.
+    """휴대폰이 보낸 몸(어깨) 랜드마크를 3D 월드 좌표로 변환하고 시각화하는 객체.
 
-    FaceTracker/HandTracker가 휴대폰으로 옮겨가기 전에 쓰던 것과 같은 패턴 —
-    mediapipe가 설치돼 있지 않으면 `available`이 False가 되고 `process()`는
-    항상 빈 리스트를 돌려준다(하드웨어/Gemini 미구성과 같은 부분 실패 패턴).
+    FaceTracker/HandTracker와 같은 전환 — 인식(모델 추론)은 하지 않는다.
+    `process_landmarks()`가 이미 계산된 랜드마크(휴대폰의 MediaPipe Tasks Vision
+    PoseLandmarker 결과 중 양쪽 어깨 2점만)를 받아 좌표 변환/깊이 추정만 한다.
+    어깨 신뢰도가 낮아 휴대폰이 아예 보내지 않은 프레임은 빈 리스트로 처리된다.
     """
 
     # 상수 설명은 fundamental.const.BodyTrackerConst 참고.
     FOCAL_NORM = CameraGeometryConst.FOCAL_NORM
     SHOULDER_WIDTH_M = BodyTrackerConst.SHOULDER_WIDTH_M
-    LEFT_SHOULDER = BodyTrackerConst.LEFT_SHOULDER
-    RIGHT_SHOULDER = BodyTrackerConst.RIGHT_SHOULDER
-    MIN_LANDMARK_VISIBILITY = BodyTrackerConst.MIN_LANDMARK_VISIBILITY
-
-    def __init__(self, min_detection_confidence=0.8, min_tracking_confidence=0.8):
-        """mediapipe Pose 세션을 만든다. mediapipe import에 실패하면 조용히
-        비활성 상태(`available == False`)로 남는다.
-
-        model_complexity=0(Lite 모델)을 쓴다 — 이건 얼굴 인식이 실패했을 때만
-        도는 폴백이라 최고 정확도보다 속도가 더 중요하다.
-        """
-        self.pose = None
-        self.error = None
-        self._mp = None
-        self._drawing = None
-        try:
-            import mediapipe as mp
-
-            self._mp = mp.solutions.pose
-            self._drawing = mp.solutions.drawing_utils
-            self.pose = self._mp.Pose(
-                static_image_mode=False,
-                model_complexity=0,
-                min_detection_confidence=min_detection_confidence,
-                min_tracking_confidence=min_tracking_confidence,
-            )
-            Logger.log("BODY", "MediaPipe pose tracker ready")
-        except Exception as e:
-            self.error = str(e)
-            Logger.log("BODY", f"Body tracking disabled: {self.error}")
-
-    @property
-    def available(self) -> bool:
-        """mediapipe 세션이 정상적으로 만들어졌는지 여부."""
-        return self.pose is not None
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, exc_type, exc_value, traceback):
-        self.close()
-
-    def close(self):
-        """mediapipe Pose 세션을 닫는다(내부 그래프/스레드 정리)."""
-        if self.pose is not None:
-            self.pose.close()
-            self.pose = None
 
     # ------------------------------------------------------------------
-    # 인식
+    # 인식(휴대폰이 이미 계산한 랜드마크를 좌표 변환만)
     # ------------------------------------------------------------------
-    def process(self, frame_rgb, T_ee, frame_shape) -> list:
-        """RGB 프레임 한 장에서 사람 몸을 찾아 `Body` 리스트로 반환한다.
+    def process_landmarks(self, raw_bodies, T_ee, frame_shape) -> list:
+        """휴대폰이 보낸 몸 랜드마크(원시 좌표)를 `Body` 리스트로 반환한다.
 
-        mediapipe Pose는 프레임 하나에 사람 한 명만 찾으므로 리스트 길이는
-        항상 0 또는 1이다(FaceTracker의 max_num_faces=1과 같은 이유로 맞춘
-        인터페이스 — FollowController가 "리스트의 첫 번째"만 보는 관례가
-        그대로 통한다).
-
-        frame_rgb  : cv2.COLOR_BGR2RGB로 변환한 프레임
+        raw_bodies : 몸마다 {"left_shoulder": [x,y,z], "right_shoulder": [x,y,z]}
+                     — 각 값은 리스트/튜플 또는 {"x":.., "y":.., "z":..} 딕셔너리
+                     모두 받는다(to_landmark 참고). 빈 리스트면 빈 리스트를 그대로
+                     돌려준다(몸 없음/신뢰도 낮음).
         T_ee       : 현재 end-effector의 4x4 월드 변환 행렬 (Arm.fk_matrix(q))
-        frame_shape: (height, width, channels)
+        frame_shape: (height, width, channels) — 정규화 좌표를 픽셀로 되돌릴 때 사용
         """
-        if not self.available:
+        if not raw_bodies:
             return []
-
-        results = self.pose.process(frame_rgb)
-        if results.pose_landmarks is None:
-            return []
-
-        landmarks = results.pose_landmarks.landmark
-        left, right = landmarks[self.LEFT_SHOULDER], landmarks[self.RIGHT_SHOULDER]
-        if (left.visibility < self.MIN_LANDMARK_VISIBILITY
-                or right.visibility < self.MIN_LANDMARK_VISIBILITY):
-            return []  # 어깨가 잘 안 보이면(가려짐 등) 신뢰하지 않는다
 
         height, width = frame_shape[0], frame_shape[1]
-        depth = self.estimate_depth(left, right, width, height)
-        center_lm = Landmark(
-            (left.x + right.x) / 2, (left.y + right.y) / 2, (left.z + right.z) / 2)
-        center = self.landmark_to_world(center_lm, T_ee, depth)
-        screen_offset = (center_lm.x - 0.5, center_lm.y - 0.5)
-        return [Body(results.pose_landmarks, depth, center, screen_offset)]
+        bodies = []
+        for raw in raw_bodies:
+            landmarks = {
+                _LEFT_SHOULDER: to_landmark(raw[_LEFT_SHOULDER]),
+                _RIGHT_SHOULDER: to_landmark(raw[_RIGHT_SHOULDER]),
+            }
+            left, right = landmarks[_LEFT_SHOULDER], landmarks[_RIGHT_SHOULDER]
+            depth = self.estimate_depth(left, right, width, height)
+            center_lm = Landmark(
+                (left.x + right.x) / 2, (left.y + right.y) / 2, (left.z + right.z) / 2)
+            center = self.landmark_to_world(center_lm, T_ee, depth)
+            screen_offset = (center_lm.x - 0.5, center_lm.y - 0.5)
+            bodies.append(Body(landmarks, depth, center, screen_offset))
+        return bodies
 
     def estimate_depth(self, left, right, frame_width, frame_height) -> float:
         """FaceTracker.estimate_depth와 같은 핀홀 역산 — 기준자만 양쪽 어깨
@@ -174,17 +136,24 @@ class BodyTracker:
     # 시각화
     # ------------------------------------------------------------------
     def draw_overlay(self, frame_bgr, bodies):
-        """카메라 프레임 위에 몸 골격(POSE_CONNECTIONS)을 그린다(제자리 수정).
+        """카메라 프레임 위에 몸 중심 점 + 어깨 사이 선을 그린다(제자리 수정).
 
-        얼굴/손과 달리 인식이 서버에서 직접 돌기 때문에 mediapipe 원본 객체가
-        있다 — drawing_utils를 그대로 쓴다(FaceTracker/HandTracker가 휴대폰
-        이관 전에 쓰던 것과 같은 방식).
+        예전엔 mediapipe drawing_utils로 몸 골격 전체(33점)를 그렸지만, 서버가
+        받는 랜드마크가 이제 어깨 2점뿐이라(FaceTracker가 468점 대신 3점만
+        받게 된 것과 같은 이유) 그 2점만으로 표시한다 — 몸이 인식되고 있는지,
+        대략 어디를 향하는지 확인하는 용도로는 충분하다.
         """
-        if not self.available:
-            return frame_bgr
+        import cv2
+
+        h, w = frame_bgr.shape[0], frame_bgr.shape[1]
         for body in bodies:
-            self._drawing.draw_landmarks(
-                frame_bgr, body.landmarks, self._mp.POSE_CONNECTIONS)
+            left = body.landmarks[_LEFT_SHOULDER]
+            right = body.landmarks[_RIGHT_SHOULDER]
+            lx, ly = int(left.x * w), int(left.y * h)
+            rx, ry = int(right.x * w), int(right.y * h)
+            cx, cy = (lx + rx) // 2, (ly + ry) // 2
+            cv2.line(frame_bgr, (lx, ly), (rx, ry), (0, 200, 0), 2)
+            cv2.circle(frame_bgr, (cx, cy), 5, (0, 200, 0), -1)
         return frame_bgr
 
     def draw_bodies_3d(self, ax, bodies):

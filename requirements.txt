@@ -13,11 +13,11 @@ dynamixel-sdk         # hardware: DYNAMIXEL Protocol 1.0 통신
 
 # --- AI 기능 (없으면 해당 기능만 비활성) ---------------------------------
 google-genai          # src.api.gemini: 채팅/요약/STT/문서 글자 읽기
-mediapipe             # perception.body_tracker: 사람 몸(어깨) 인식 — 얼굴 인식
-                      # 폴백으로 서버에서 직접 돈다. 얼굴/손 인식 자체는
-                      # 휴대폰 브라우저가 MediaPipe Tasks Vision(JS)으로 하므로
-                      # 이 패키지가 필요한 건 몸 폴백뿐이다(perception/body_tracker.py,
-                      # perception/face_tracker.py, perception/hand_tracker.py 참고).
+# mediapipe(Python)는 더 이상 필요 없다 — 얼굴/손/몸(어깨, 얼굴 인식 실패
+# 폴백) 인식 전부 휴대폰 브라우저가 MediaPipe Tasks Vision(JS)으로 하고,
+# 서버는 좌표 변환만 한다(perception/face_tracker.py, hand_tracker.py,
+# body_tracker.py 참고). 기구학 모듈과 마찬가지로 이 프로젝트의 인식
+# 파이프라인은 이제 표준 라이브러리 + opencv/numpy만으로 돈다.
 
 # --- 라즈베리파이(조명)에서만 필요 --------------------------------------
 # raspberry-server/server.py는 파이에서 따로 실행한다. 파이에 설치:

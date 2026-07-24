@@ -30,19 +30,23 @@ Hands를 다시 돌릴 이유가 없다.
     휴대폰(MediaPipe Tasks Vision) → /ws/camera → Camera.face_landmarks
         → FaceTracker.process_landmarks() → FollowController (팔 추종)
 
-이제 서버는 얼굴/손 어느 쪽도 모델 추론을 하지 않는다 — 둘 다 좌표 변환만
-한다. mediapipe(Python)는 대부분 이 루프의 의존성이 아니게 됐다.
+[몸 폴백도 결국 휴대폰으로] 얼굴 인식이 실패하는 경우(옆모습, 고개를 돌린
+경우 등)를 위한 사람 몸(어깨) 인식 폴백은 처음엔 "사람 인식은 서버가 직접"
+하도록 명시적으로 요청받아 서버 mediapipe Pose로 돌았지만, 얼굴/손과 똑같은
+이유(서버가 프레임마다 여러 모델 추론 + matplotlib 렌더링 + 하드웨어 제어를
+다 하면 폰의 프레임레이트를 못 따라간다)로 이후 몸 인식도 휴대폰으로
+옮겼다 — 지금은 셋 다 같은 경로다:
 
-[몸 폴백 추가] 얼굴 인식이 실패하는 경우(옆모습, 고개를 돌린 경우 등)를 위해
-사람 몸(어깨) 인식을 폴백으로 추가했다 — 이건 사용자가 명시적으로 서버에서
-돌아야 한다고 요청한 유일한 예외다:
+    휴대폰(MediaPipe Tasks Vision) → /ws/camera → Camera.body_landmarks
+        → BodyTracker.process_landmarks() → FollowController (팔 추종)
 
-    카메라 프레임(수신된 JPEG) → perception.body_tracker.BodyTracker.process()
-        (서버 mediapipe Pose, 얼굴이 안 보일 때만) → FollowController (팔 추종)
+이제 서버는 얼굴/손/몸 어느 쪽도 모델 추론을 하지 않는다 — 셋 다 좌표 변환만
+한다. mediapipe(Python)는 더 이상 이 루프(이 프로젝트 전체)의 의존성이 아니다.
 
-`FollowController`의 우선순위는 얼굴 > 몸 > 손 > idle이다. 얼굴이 보이는
-프레임에서는 몸 인식 자체를 건너뛰므로(아래 `detect_bodies()` 참고), 서버가
-하는 이 유일한 mediapipe 추론도 상시 비용은 아니다.
+`FollowController`의 우선순위는 얼굴 > 몸 > 손 > idle이다(거리 기반 얼굴<->몸
+전환 + 히스테리시스 + 디바운스는 perception/follow_controller.py 참고) —
+몸 인식이 이제 서버 추론이 아니므로, 그 우선순위 판정과 무관하게 손처럼 매
+프레임 그냥 수신한 좌표를 변환한다(아래 `collect_bodies()`).
 
 세 가지 일이 **서로 다른 주기**로 돈다 — 이것도 병합에서 정리한 부분이다:
   1. 인식/판단  : 새 프레임이 올 때마다(최대 ~20fps). 상태 머신이 최신이어야 함.
@@ -57,7 +61,7 @@ import time
 import cv2
 import numpy as np
 
-from fundamental.const import AppConst, FollowControllerConst
+from fundamental.const import AppConst
 from fundamental.logger import Logger
 from perception.body_tracker import BodyTracker
 from perception.face_tracker import FaceTracker
@@ -73,18 +77,6 @@ class PerceptionLoop:
     # 상수 설명은 fundamental.const.AppConst 참고.
     COMMAND_MIN_INTERVAL_S = AppConst.COMMAND_MIN_INTERVAL_S
     VIS_MIN_INTERVAL_S = AppConst.VIS_MIN_INTERVAL_S
-    BODY_MEDIAPIPE_MAX_WIDTH = AppConst.BODY_MEDIAPIPE_MAX_WIDTH
-    # FollowController와 같은 값을 공유한다 — 얼굴이 이 거리보다 가까우면
-    # FollowController가 몸으로 갈아탈 일이 없으니 몸 인식 자체를 건너뛴다
-    # (fundamental.const.FollowControllerConst 참고).
-    FACE_BODY_SWITCH_DISTANCE_M = FollowControllerConst.FACE_BODY_SWITCH_DISTANCE_M
-    # FollowController._pick_target의 히스테리시스 폭 — 몸 인식은 이 폭만큼
-    # 더 일찍(가까운 거리에서부터) 켜 둔다. 그래야 얼굴이 히스테리시스
-    # 경계(FACE_BODY_SWITCH_DISTANCE_M + 이 값)를 실제로 넘어 몸으로 갈아탈
-    # 시점에 몸 데이터가 이미 준비돼 있다 — 정확히 경계에서만 켜면 그 프레임엔
-    # 아직 몸이 안 잡혀 전환이 한 박자 늦거나, 몸 인식 자체가 들쭉날쭉해져
-    # 히스테리시스를 둔 의미가 없어진다.
-    FACE_BODY_SWITCH_HYSTERESIS_M = FollowControllerConst.FACE_BODY_SWITCH_HYSTERESIS_M
 
     def __init__(self, arm_service, camera, renderer,
                  gesture_bridge=None, show_preview=True):
@@ -102,13 +94,10 @@ class PerceptionLoop:
         self.gesture_bridge = gesture_bridge
         self.show_preview = show_preview
 
-        # 손/얼굴 인식은 둘 다 휴대폰이 한다 — 이 객체들은 좌표 변환/시각화만
+        # 손/얼굴/몸 인식은 셋 다 휴대폰이 한다 — 이 객체들은 좌표 변환/시각화만
         # 담당한다(모델 추론 없음, mediapipe 의존성 없음).
         self.hand_tracker = HandTracker()
         self.face_tracker = FaceTracker()
-        # 몸(어깨) 인식은 얼굴 인식 실패 시 폴백으로 서버가 직접 mediapipe
-        # Pose를 돌린다 — mediapipe가 없으면 available이 False가 되어
-        # process()가 빈 리스트를 돌려준다(앱은 계속 뜸).
         self.body_tracker = BodyTracker()
         # 얼굴 > 몸 > 손 > idle 우선순위와 두리번거리기 상태 머신.
         self.follow_controller = FollowController(arm_service.arm)
@@ -162,19 +151,7 @@ class PerceptionLoop:
         T_ee = self.arm_service.ee_matrix(q)
 
         faces = self.collect_faces(T_ee, frame.shape)
-        # 몸(어깨) 인식은 얼굴이 안 보이거나, 보여도 FollowController가 몸으로
-        # 갈아탈 만큼 멀 때만 돈다(FACE_BODY_SWITCH_DISTANCE_M) — 서버가 하는
-        # 유일한 mediapipe 추론이라, 필요할 때만 돌려 비용을 아낀다. 얼굴이
-        # 가까이 있으면 몸 인식 자체를 건너뛴다. 경계에서 히스테리시스 폭만큼
-        # 더 일찍(가까운 쪽에서부터) 켜는 이유는 위 FACE_BODY_SWITCH_HYSTERESIS_M
-        # 참고 — FollowController가 실제로 몸으로 갈아타는 시점보다 몸 인식이
-        # 늦게 켜지면 그 히스테리시스를 둔 의미가 없어진다.
-        primary_face = faces[0] if faces else None
-        need_body = (
-            primary_face is None
-            or primary_face.depth >= self.FACE_BODY_SWITCH_DISTANCE_M - self.FACE_BODY_SWITCH_HYSTERESIS_M
-        )
-        bodies = self.detect_bodies(frame, T_ee) if need_body else []
+        bodies = self.collect_bodies(T_ee, frame.shape)
         hands = self.collect_hands(T_ee, frame.shape)
 
         now = time.monotonic()
@@ -197,23 +174,19 @@ class PerceptionLoop:
             return []
         return self.face_tracker.process_landmarks(raw_faces, T_ee, frame_shape)
 
-    def detect_bodies(self, frame, T_ee):
-        """프레임에서 사람 몸(어깨)을 찾는다(서버 mediapipe Pose) — 얼굴
-        인식이 실패했을 때만 호출부(process_frame)가 부르는 폴백이다.
+    def collect_bodies(self, T_ee, frame_shape):
+        """휴대폰이 보낸 몸(어깨) 랜드마크를 월드 좌표 `Body` 목록으로 바꾼다.
 
-        mediapipe 비용은 픽셀 수에 비례하므로, 폰이 큰 해상도로 보내면
-        BODY_MEDIAPIPE_MAX_WIDTH로 줄인 **복사본**에서만 인식을 돌린다.
-        랜드마크는 정규화 좌표(0~1)라 비율만 유지하면 정확도에 영향이 없고,
-        깊이 추정에는 원본 크기(`frame.shape`)를 그대로 넘긴다 — 핀홀 계산이
-        실제 카메라 화각 기준이라 축소본 크기를 쓰면 거리가 어긋난다.
+        collect_faces()/collect_hands()와 같은 이유로 같은 모양이다 — 얼굴
+        인식이 실패했을 때의 폴백이지만, 그 판단(얼굴<->몸 우선순위)은
+        FollowController가 하므로 여기서는 얼굴 여부와 무관하게 매 프레임
+        그냥 수신한 좌표를 변환한다. 폰이 아직 아무것도 안 보냈거나 어깨
+        신뢰도가 낮아 이번 프레임엔 안 보냈으면 빈 목록.
         """
-        rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        height, width = rgb.shape[:2]
-        if width > self.BODY_MEDIAPIPE_MAX_WIDTH:
-            scale = self.BODY_MEDIAPIPE_MAX_WIDTH / width
-            rgb = cv2.resize(rgb, (int(width * scale), int(height * scale)),
-                             interpolation=cv2.INTER_AREA)
-        return self.body_tracker.process(rgb, T_ee, frame.shape)
+        raw_bodies = self.camera.latest_body_landmarks()
+        if not raw_bodies:
+            return []
+        return self.body_tracker.process_landmarks(raw_bodies, T_ee, frame_shape)
 
     def collect_hands(self, T_ee, frame_shape):
         """휴대폰이 보낸 손 랜드마크를 월드 좌표 `Hand` 목록으로 바꾼다.
@@ -291,7 +264,6 @@ class PerceptionLoop:
         cv2.imshow(AppConst.WINDOW_SCENE, scene)
 
     def close(self):
-        """창을 닫고 mediapipe Pose 세션을 정리한다(얼굴/손은 인식을 휴대폰이
-        하므로 서버가 mediapipe 세션을 만드는 건 몸 인식(BodyTracker)뿐)."""
+        """미리보기 창을 닫는다 — 얼굴/손/몸 어느 트래커도 인식을 휴대폰이
+        하므로(모델 추론 없음) 서버 쪽에 정리할 mediapipe 세션이 없다."""
         cv2.destroyAllWindows()
-        self.body_tracker.close()

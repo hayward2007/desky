@@ -508,12 +508,13 @@
     ctx.scale(-1, 1);
     ctx.drawImage(video, -vw / 2, -vh / 2, vw, vh);
     ctx.restore();
-    // 손/얼굴 인식은 둘 다 이 방향 보정이 끝난 캔버스에 대고 돈다(아래 10번
-    // 섹션) — 서버가 받는 프레임과 정확히 같은 좌표계(이미 정방향으로
+    // 손/얼굴/몸 인식은 셋 다 이 방향 보정이 끝난 캔버스에 대고 돈다(아래
+    // 10번 섹션) — 서버가 받는 프레임과 정확히 같은 좌표계(이미 정방향으로
     // 회전/미러링됨)여야 랜드마크 좌표가 서버 쪽 계산(깊이 추정·월드 변환·
     // 제스처 판정)과 어긋나지 않는다.
     if (window.__sendHandLandmarks) window.__sendHandLandmarks(canvas, ws);
     if (window.__sendFaceLandmarks) window.__sendFaceLandmarks(canvas, ws);
+    if (window.__sendBodyLandmarks) window.__sendBodyLandmarks(canvas, ws);
     canvas.toBlob((blob) => {
       if (blob && ws && ws.readyState === WebSocket.OPEN) {
         ws.send(blob);
@@ -1493,21 +1494,23 @@
 
 <script type="module">
   /* =====================================================================
-     10. 손/얼굴 인식 — 휴대폰에서 직접 MediaPipe Tasks Vision
-        (HandLandmarker + FaceLandmarker)을 돌려서 좌표만(이미지 자체가
-        아니라) 웹소켓으로 보낸다.
+     10. 손/얼굴/몸 인식 — 휴대폰에서 직접 MediaPipe Tasks Vision
+        (HandLandmarker + FaceLandmarker + PoseLandmarker)을 돌려서
+        좌표만(이미지 자체가 아니라) 웹소켓으로 보낸다.
 
-        원래는 서버(컴퓨터)가 얼굴 인식과 손 인식을 둘 다 mediapipe(Python)로
-        처리했는데, 컴퓨터 하나가 두 모델 추론 + matplotlib 3D 렌더링 +
-        하드웨어 제어까지 매 프레임 다 하려니 폰이 실제로 보내는 프레임레이트
-        (~20fps, 위 FRAME_INTERVAL_MS)를 못 따라가서 로봇 반응이 느려지고
-        뚝뚝 끊겼다. 그래서 손 인식에 이어 얼굴 인식도 폰이 직접(로컬) 한다 —
-        얼굴은 그것 말고도 서버가 받는 프레임이 JPEG 압축 + 다운스케일을 거쳐
-        화질이 떨어지는 바람에 인식 자체가 잘 안 되는 문제도 있었는데, 압축
-        전 원본 영상에서 직접 인식하면 그 문제도 같이 없어진다. 서버(컴퓨터)는
-        이제 얼굴/손 어느 쪽도 모델 추론을 하지 않는다 —
-        perception/hand_tracker.py, perception/face_tracker.py,
-        src/api/camera.py 참고.
+        원래는 서버(컴퓨터)가 얼굴/손/몸(어깨, 얼굴 인식 실패 시 폴백) 인식을
+        전부 mediapipe(Python)로 처리했는데, 컴퓨터 하나가 여러 모델 추론 +
+        matplotlib 3D 렌더링 + 하드웨어 제어까지 매 프레임 다 하려니 폰이
+        실제로 보내는 프레임레이트(~20fps, 위 FRAME_INTERVAL_MS)를 못 따라가서
+        로봇 반응이 느려지고 뚝뚝 끊겼다. 그래서 손 → 얼굴 → 몸 순서로 셋 다
+        폰이 직접(로컬) 하도록 옮겼다 — 얼굴은 그것 말고도 서버가 받는
+        프레임이 JPEG 압축 + 다운스케일을 거쳐 화질이 떨어지는 바람에 인식
+        자체가 잘 안 되는 문제도 있었는데, 압축 전 원본 영상에서 직접
+        인식하면 그 문제도 같이 없어진다. 서버(컴퓨터)는 이제 셋 중 어느
+        것도 모델 추론을 하지 않는다 — perception/hand_tracker.py,
+        perception/face_tracker.py, perception/body_tracker.py,
+        src/api/camera.py 참고. mediapipe(Python)는 더 이상 이 프로젝트의
+        의존성이 아니다.
 
         [병합] 손 랜드마크는 서버에서 두 갈래로 쓰인다:
           ① perception/follow_controller.py — 팔이 손을 따라가는 추종
@@ -1518,23 +1521,24 @@
         아니라 서버 쪽 `fundamental.const.FollowControllerConst.HAND_FOLLOW_ENABLED`를
         False로 두는 게 맞다 — 그러면 손 랜드마크는 계속 전송/인식되어
         제스처는 그대로 동작하고, `FollowController`만 그 위치로 팔을
-        움직이지 않는다. 얼굴 랜드마크는 팔 추종에만 쓰이므로
-        FACE_TRACKING_ENABLED는 독립적으로 켜고 끌 수 있다 — 다 꺼도
-        idle 두리번거림, 그리고 버튼·음성으로 하는 모든 웹 기능은 그대로
-        동작한다.
+        움직이지 않는다. 얼굴/몸 랜드마크는 팔 추종에만 쓰이므로
+        FACE_TRACKING_ENABLED/POSE_TRACKING_ENABLED는 독립적으로 켜고 끌 수
+        있다 — 다 꺼도 idle 두리번거림, 그리고 버튼·음성으로 하는 모든 웹
+        기능은 그대로 동작한다.
 
         위 1번 섹션의 captureLoop()이 방향 보정(회전 + 좌우 미러링)까지 끝낸
-        캡처 캔버스(#capture)에 대고 둘 다 돌린다 — 서버가 받는 좌표계와
+        캡처 캔버스(#capture)에 대고 셋 다 돌린다 — 서버가 받는 좌표계와
         똑같은 기준이어야 랜드마크 좌표가 서버 쪽 깊이 추정/월드 변환과
         어긋나지 않는다. 이 스크립트가 로드/초기화에 실패해도(오프라인, 구형
-        브라우저, CDN 접근 불가 등) 조용히 비활성으로 남는다 — 손/얼굴
+        브라우저, CDN 접근 불가 등) 조용히 비활성으로 남는다 — 손/얼굴/몸
         인식 없이 idle 두리번거림만으로 계속 동작한다(perception 패키지의
-        "부분 실패" 관례와 같은 정신). 손과 얼굴의 초기화 실패는 서로
-        독립적이다 — 한쪽이 실패해도 다른 쪽은 계속 시도한다.
+        "부분 실패" 관례와 같은 정신). 셋의 초기화 실패는 서로 독립적이다 —
+        하나가 실패해도 나머지는 계속 시도한다.
      ===================================================================== */
   import {
     HandLandmarker,
     FaceLandmarker,
+    PoseLandmarker,
     FilesetResolver,
   } from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.21";
 
@@ -1546,8 +1550,12 @@
   // 위 주석 참고.
   const HAND_TRACKING_ENABLED = true;
   // 얼굴 추적 스위치. false면 FaceLandmarker를 로드/초기화하지 않는다 —
-  // 서버는 "얼굴 없음"과 똑같이 동작해 손 추종/idle 두리번거림만 남는다.
+  // 서버는 "얼굴 없음"과 똑같이 동작해 몸/손 추종·idle 두리번거림만 남는다.
   const FACE_TRACKING_ENABLED = true;
+  // 몸(어깨) 추적 스위치 — 얼굴 인식 실패(옆모습 등) 시 폴백. false면
+  // PoseLandmarker를 로드/초기화하지 않는다 — 서버는 "몸 없음"과 똑같이
+  // 동작해 얼굴이 안 보이면 곧장 손/idle로 넘어간다.
+  const POSE_TRACKING_ENABLED = true;
 
   const TASKS_VISION_WASM_URL =
     "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.21/wasm";
@@ -1555,6 +1563,11 @@
     "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/latest/hand_landmarker.task";
   const FACE_MODEL_URL =
     "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/latest/face_landmarker.task";
+  // lite 변형을 쓴다 — 이건 얼굴 인식이 실패했을 때만 쓰는 폴백이라 최고
+  // 정확도보다 속도/배터리가 더 중요하다(서버측 BodyTracker가 쓰던
+  // model_complexity=0과 같은 이유, perception/body_tracker.py 참고).
+  const POSE_MODEL_URL =
+    "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/latest/pose_landmarker_lite.task";
 
   // FaceTracker가 실제로 쓰는 랜드마크 인덱스 — MediaPipe 얼굴 모델의 표준
   // 468/478점 위상에서 코끝 근처(1)와 양쪽 눈 바깥쪽 끝(33=오른쪽,
@@ -1566,10 +1579,26 @@
   const FACE_LEFT_EYE_OUTER = 33;
   const FACE_RIGHT_EYE_OUTER = 263;
 
+  // BodyTracker가 실제로 쓰는 랜드마크 인덱스 — mediapipe Pose 표준 33점
+  // 위상에서 양쪽 어깨다. fundamental.const.BodyTrackerConst와 반드시
+  // 맞춰야 한다(FACE_CENTER_LANDMARK 등과 같은 이유).
+  const POSE_LEFT_SHOULDER = 11;
+  const POSE_RIGHT_SHOULDER = 12;
+  // 어깨 랜드마크의 visibility(0~1)가 이보다 낮으면(다른 신체 부위/물체에
+  // 가려짐, 옆모습에서 반대쪽 어깨 등) 신뢰하지 않고 이번 프레임엔 몸을 아예
+  // 보내지 않는다 — fundamental.const.BodyTrackerConst.MIN_LANDMARK_VISIBILITY와
+  // 반드시 맞춰야 한다. Tasks Vision의 일부 버전은 visibility를 안 채우기도
+  // 하는데, 그때는 undefined로 남으므로 "실패 열림"(무조건 통과)으로 둔다 —
+  // 이 폴백 자체가 이미 얼굴 인식 실패 시에만 쓰이므로, 신뢰도 필터 없이
+  // 지나가는 쪽이 아예 몸 추종을 잃는 쪽보다 낫다.
+  const POSE_MIN_SHOULDER_VISIBILITY = 0.5;
+
   let handLandmarker = null;
   let handLandmarkerReady = false;
   let faceLandmarker = null;
   let faceLandmarkerReady = false;
+  let poseLandmarker = null;
+  let poseLandmarkerReady = false;
 
   /** 지정한 실행 방식(GPU/CPU)으로 HandLandmarker 인스턴스를 만든다. */
   async function createHandLandmarker(vision, delegate) {
@@ -1589,13 +1618,22 @@
     });
   }
 
+  /** 지정한 실행 방식(GPU/CPU)으로 PoseLandmarker 인스턴스를 만든다. */
+  async function createPoseLandmarker(vision, delegate) {
+    return PoseLandmarker.createFromOptions(vision, {
+      baseOptions: { modelAssetPath: POSE_MODEL_URL, delegate },
+      numPoses: 1,
+      runningMode: "VIDEO",
+    });
+  }
+
   (async () => {
-    if (!HAND_TRACKING_ENABLED && !FACE_TRACKING_ENABLED) return;
+    if (!HAND_TRACKING_ENABLED && !FACE_TRACKING_ENABLED && !POSE_TRACKING_ENABLED) return;
     let vision;
     try {
       vision = await FilesetResolver.forVisionTasks(TASKS_VISION_WASM_URL);
     } catch (e) {
-      console.warn("MediaPipe Tasks Vision runtime unavailable, hand/face tracking disabled:", e);
+      console.warn("MediaPipe Tasks Vision runtime unavailable, hand/face/pose tracking disabled:", e);
       return;
     }
 
@@ -1623,6 +1661,19 @@
         faceLandmarkerReady = true;
       } catch (e) {
         console.warn("FaceLandmarker unavailable, face tracking disabled:", e);
+      }
+    }
+
+    if (POSE_TRACKING_ENABLED) {
+      try {
+        try {
+          poseLandmarker = await createPoseLandmarker(vision, "GPU");
+        } catch (e) {
+          poseLandmarker = await createPoseLandmarker(vision, "CPU");
+        }
+        poseLandmarkerReady = true;
+      } catch (e) {
+        console.warn("PoseLandmarker unavailable, body tracking disabled:", e);
       }
     }
   })();
@@ -1666,6 +1717,39 @@
       right_eye_outer: [lm[FACE_RIGHT_EYE_OUTER].x, lm[FACE_RIGHT_EYE_OUTER].y, lm[FACE_RIGHT_EYE_OUTER].z],
     }));
     wsConn.send(JSON.stringify({ type: "face_landmarks", faces }));
+  };
+
+  /** 위와 같은 이유로 매 프레임 호출된다(얼굴 인식 실패 폴백). 몸이 없어도
+   * 빈 배열을 그대로 보낸다(src/api/camera.py의 Camera.latest_body_landmarks
+   * 참고). 33점 전체가 아니라 BodyTracker가 실제로 쓰는 어깨 2개만 이름
+   * 붙여 보낸다 — perception/body_tracker.py의 process_landmarks()가
+   * 기대하는 모양과 정확히 맞아야 한다. 어깨 신뢰도(visibility)가 낮으면
+   * (옆모습 등, 서버 mediapipe Pose가 하던 판정과 같은 기준) 이 포즈 자체를
+   * 결과에서 뺀다 — 신뢰도 판정 자체가 폰으로 옮겨왔으므로 서버는 받은 걸
+   * 그대로 믿는다. */
+  window.__sendBodyLandmarks = function (canvasEl, wsConn) {
+    if (!poseLandmarkerReady || !wsConn || wsConn.readyState !== WebSocket.OPEN) return;
+    let result;
+    try {
+      result = poseLandmarker.detectForVideo(canvasEl, performance.now());
+    } catch (e) {
+      return;
+    }
+    const posesRaw = (result && result.landmarks) || [];
+    const bodies = [];
+    for (const lm of posesRaw) {
+      const left = lm[POSE_LEFT_SHOULDER];
+      const right = lm[POSE_RIGHT_SHOULDER];
+      if (!left || !right) continue;
+      const leftVisible = left.visibility === undefined || left.visibility >= POSE_MIN_SHOULDER_VISIBILITY;
+      const rightVisible = right.visibility === undefined || right.visibility >= POSE_MIN_SHOULDER_VISIBILITY;
+      if (!leftVisible || !rightVisible) continue;
+      bodies.push({
+        left_shoulder: [left.x, left.y, left.z],
+        right_shoulder: [right.x, right.y, right.z],
+      });
+    }
+    wsConn.send(JSON.stringify({ type: "body_landmarks", bodies }));
   };
 </script>
 </body>

@@ -416,20 +416,29 @@ class BodyTrackerConst:
     """perception.body_tracker.BodyTracker가 쓰는 상수.
 
     얼굴 인식(휴대폰)이 실패했을 때(옆모습, 고개를 돌린 경우 등) 폴백으로
-    쓰는 사람 몸(어깨) 인식 — 이것만 유일하게 서버에서 mediapipe로 직접
-    돈다(사용자가 명시적으로 요청한 부분). 얼굴이 보이는 프레임에서는 아예
-    호출되지 않으므로(src/perception_loop.py 참고) 상시 비용은 아니다.
+    쓰는 사람 몸(어깨) 인식. 처음엔 서버가 mediapipe로 직접 돌렸지만(사용자가
+    명시적으로 요청했던 부분), 얼굴/손과 같은 이유로 이후 휴대폰으로 옮겼다
+    (perception/body_tracker.py 모듈 docstring 참고) — 지금은 서버 쪽 python
+    코드에서 안 쓴다(인식 자체를 안 하므로).
+
+    LEFT_SHOULDER/RIGHT_SHOULDER는 여기서도 실제로 안 쓴다(인덱싱은 이제
+    휴대폰이 한다) — 다만 `src/templates/mobile.html`의 같은 이름 JS 상수가
+    이 값들과 반드시 일치해야 하므로, "실제 정의는 여기, 값이 뭘 뜻하는지"의
+    기준점으로 남겨 둔다(FaceTrackerConst의 LEFT_EYE_OUTER 등과 같은 방식).
     """
 
     # 양쪽 어깨 사이 실제 거리 추정치(성인 평균) — 실측 캘리브레이션 값이
     # 아니므로 거리 추정은 참고치. FaceTrackerConst.EYE_OUTER_DISTANCE_M,
     # HandTrackerConst.WRIST_TO_THUMB_CMC_M와 같은 방식(핀홀 역산의 기준자).
+    # perception/body_tracker.py의 BodyTracker.estimate_depth가 실제로 쓴다.
     SHOULDER_WIDTH_M = 0.40
-    # mediapipe Pose 표준 33점 랜드마크 중 양쪽 어깨 인덱스.
+    # mediapipe Pose(PoseLandmarker 포함) 표준 33점 랜드마크 중 양쪽 어깨
+    # 인덱스 — mobile.html이 이 값으로 어깨 2점만 뽑아 보낸다.
     LEFT_SHOULDER = 11
     RIGHT_SHOULDER = 12
     # 어깨 랜드마크의 visibility(0~1)가 이보다 낮으면(다른 신체 부위나 물체에
-    # 가려짐 등) 신뢰하지 않고 몸을 못 찾은 것으로 본다.
+    # 가려짐 등) 신뢰하지 않는다 — 이 판정도 이제 휴대폰이 한다(신뢰도가
+    # 낮으면 그 몸 자체를 안 보낸다). mobile.html의 같은 이름 JS 상수 참고.
     MIN_LANDMARK_VISIBILITY = 0.5
 
 
@@ -683,13 +692,6 @@ class AppConst:
     # 폰이 보내는 ~20fps를 못 따라간다. 이 창은 로봇 동작에 영향을 주지
     # 않는 디버그용 미리보기이므로 훨씬 느리게 갱신해도 무방하다.
     VIS_MIN_INTERVAL_S = 0.1
-
-    # PerceptionLoop.detect_bodies()가 mediapipe Pose에 넘기는 프레임 복사본의
-    # 최대 가로 폭(px) — mediapipe 비용은 픽셀 수에 비례하므로, 폰이 그보다
-    # 고해상도로 보내면 이 폭으로 다운스케일한 복사본에서만 인식을 돌린다
-    # (원본 프레임/치수는 오버레이 표시와 깊이 추정에 그대로 쓰인다). 얼굴/손
-    # 인식은 이제 서버에서 안 도니 이 상수는 몸(어깨) 폴백 전용이다.
-    BODY_MEDIAPIPE_MAX_WIDTH = 480
 
     # Flask 개발 서버 바인딩. 0.0.0.0이어야 같은 공유기에 붙은 휴대폰이
     # https://<PC의 LAN IP>:8000/mobile 로 접속할 수 있다.

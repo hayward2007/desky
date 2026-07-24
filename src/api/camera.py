@@ -14,12 +14,12 @@ class Camera:
     """Holds the latest JPEG frame streamed from /mobile over /ws/camera plus
     the routes that expose it. The same WebSocket also carries recorded
     voice-question clips (WebM/Opus) from the mic button (binary, told apart
-    from JPEG by content — SOI marker vs WebM's EBML header) and hand/face
+    from JPEG by content — SOI marker vs WebM's EBML header) and hand/face/body
     landmark JSON messages (text) from the phone's own MediaPipe Tasks Vision
-    Hand/FaceLandmarker (perception.hand_tracker/face_tracker no longer run
-    detection on the server — see their module docstrings for why). Voice
-    clips are handed off to `gemini` for transcription and the transcript is
-    sent back over that same connection.
+    Hand/Face/PoseLandmarker (perception.hand_tracker/face_tracker/body_tracker
+    no longer run detection on the server — see their module docstrings for
+    why). Voice clips are handed off to `gemini` for transcription and the
+    transcript is sent back over that same connection.
 
     [병합] 이 소켓은 이제 양방향이다. 서버 → 폰 방향으로도 명령을 밀어 넣는다
     (`broadcast()`): 가위바위보 제스처는 서버의 카메라 루프에서 확정되는데
@@ -42,6 +42,13 @@ class Camera:
         # {"center", "left_eye_outer", "right_eye_outer": [x, y, z]}, or []
         # if the phone currently sees no face. None until the first message.
         self.face_landmarks = None
+        # Latest body-landmark message from the phone: a list of bodies, each
+        # {"left_shoulder", "right_shoulder": [x, y, z]}, or [] if the phone
+        # currently sees no reliably-visible shoulders. None until the first
+        # message. The phone itself decides whether a pose is confident
+        # enough to send (fundamental.const.BodyTrackerConst.MIN_LANDMARK_VISIBILITY)
+        # — perception.body_tracker no longer runs detection or filtering.
+        self.body_landmarks = None
         # 서버 → 폰 방향으로 명령을 밀어 넣기 위해 열려 있는 소켓을 들고 있는다
         # (제스처 확정은 카메라 루프에서 일어나는데 실행은 폰이 해야 하므로).
         self.sockets = []
@@ -131,12 +138,12 @@ class Camera:
             Logger.log("CAMERA", "Mobile client disconnected")
 
     def _handle_text_message(self, text):
-        """Parse a text WebSocket message. "hand_landmarks" and
-        "face_landmarks" are defined today (mobile.html's phone-side
-        Hand/FaceLandmarker results); anything else (malformed JSON, unknown
-        type) is logged and ignored rather than killing the connection — a
-        bad client message must never crash the loop that also carries the
-        JPEG stream and voice clips."""
+        """Parse a text WebSocket message. "hand_landmarks", "face_landmarks"
+        and "body_landmarks" are defined today (mobile.html's phone-side
+        Hand/Face/PoseLandmarker results); anything else (malformed JSON,
+        unknown type) is logged and ignored rather than killing the
+        connection — a bad client message must never crash the loop that
+        also carries the JPEG stream and voice clips."""
         try:
             msg = json.loads(text)
         except (ValueError, TypeError) as e:
@@ -157,6 +164,12 @@ class Camera:
                 return
             with self.lock:
                 self.face_landmarks = faces
+        elif msg_type == "body_landmarks":
+            bodies = msg.get("bodies")
+            if not isinstance(bodies, list):
+                return
+            with self.lock:
+                self.body_landmarks = bodies
 
     def latest_frame(self):
         """GET /api/camera/latest.jpg"""
@@ -204,10 +217,16 @@ class Camera:
         with self.lock:
             return self.face_landmarks
 
+    def latest_body_landmarks(self):
+        """Thread-safe read of the latest phone-reported body landmarks.
+        Same contract as latest_hand_landmarks()/latest_face_landmarks()."""
+        with self.lock:
+            return self.body_landmarks
+
     def register(self, app, sock):
         """이 객체가 담당하는 라우트를 Flask 앱/Sock에 붙인다.
 
-        WS   /ws/camera               ws_camera    (폰 → 서버: JPEG·음성·손/얼굴 랜드마크,
+        WS   /ws/camera               ws_camera    (폰 → 서버: JPEG·음성·손/얼굴/몸 랜드마크,
                                                     서버 → 폰: transcript·제스처 명령)
         GET  /api/camera/latest.jpg   latest_frame (대시보드 미리보기)
         GET  /api/camera/status       status
