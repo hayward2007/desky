@@ -122,3 +122,12 @@ class Gemini:
             contents=[image_part, instruction],
         )
         return self.answer_text(response) or "(텍스트 없음)"
+
+    def register(self, app):
+        """이 객체가 담당하는 라우트를 Flask 앱에 붙인다.
+
+        POST /api/ask  ask  {question, mode: chat|summary}
+        (음성 클립의 STT는 라우트가 아니라 src.api.camera.Camera가 웹소켓으로
+        받은 오디오를 `transcribe()`에 직접 넘기는 방식이다.)
+        """
+        app.route("/api/ask", methods=["POST"], endpoint="ask")(self.ask)

@@ -3,59 +3,17 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <meta name="theme-color" content="#D7D9D4">
+  <meta name="theme-color" content="#EDEEF1">
   <title>desky — 로봇 시야</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='theme.css') }}">
   <style>
-    @import url("https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.min.css");
-    @import url("https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600&display=swap");
     /* ===================================================================
        desky mobile — 팔 끝에 장착된 폰에서 여는 계기판.
-       역할별 색: 코랄=살아있는 것(영상·로봇의 말), 슬레이트=사용자 동작,
+       색·글꼴·칩/큰버튼 같은 공통 요소는 static/theme.css에 있고, 여기에는
+       이 화면만의 배치(좌: 듣는 면 / 우: 카메라)만 남긴다.
+       역할별 색: 인디고=살아있는 것(영상·로봇의 말), 그래파이트=사용자 동작,
        잉크=듣는 면. 가로(landscape) 기준으로 설계하고 세로에서는 세로 스택.
        =================================================================== */
-    :root {
-      --chassis:  #D7D9D4;   /* 페이지 바탕 — 차가운 기계 회색 */
-      --panel:    #FCFCFB;   /* 밝은 패널 표면 */
-      --ink:      #17191D;   /* 어두운 패널 + 본문 글자 */
-      --ink-2:    #23262C;   /* 잉크 위의 한 단계 밝은 면 */
-      --bone:     #F2F0EB;   /* 잉크 위 글자 */
-      --coral:    #E08A80;   /* 라이브 / 로봇의 말 */
-      --coral-dp: #C4665C;   /* 밝은 배경 위 코랄 텍스트 */
-      --slate:    #7FA2B2;   /* 사용자가 누르는 것 */
-      --slate-dp: #4E7383;
-      --dim:      #8A8F98;
-      --line:     rgba(23,25,29,.12);
-
-      --r-panel: 18px;
-      --r-btn: 14px;
-      --gap: 12px;
-
-      --sans: "Pretendard Variable", Pretendard, -apple-system, BlinkMacSystemFont, system-ui, Roboto, "Helvetica Neue", "Segoe UI", "Apple SD Gothic Neo", "Noto Sans KR", "Malgun Gothic", sans-serif;
-      --mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Monaco, Consolas, monospace;
-    }
-
-    * { box-sizing: border-box; }
-    html, body { height: 100%; }
-    body {
-      margin: 0;
-      font-family: var(--sans);
-      color: var(--ink);
-      background: var(--chassis);
-      -webkit-font-smoothing: antialiased;
-      overscroll-behavior: none;
-    }
-
-    /* 모든 대문자 마이크로 라벨 — 이 UI의 공통 어휘 */
-    .tag {
-      font-family: var(--mono);
-      font-size: 10px;
-      font-weight: 600;
-      letter-spacing: .14em;
-      text-transform: uppercase;
-      color: var(--dim);
-    }
-    .num { font-family: var(--mono); font-variant-numeric: tabular-nums; }
-
     /* ---------- 전체 레이아웃 ---------- */
     .app {
       height: 100%;
@@ -79,7 +37,7 @@
       font-size: 15px;
       letter-spacing: -.02em;
     }
-    .brand span { color: var(--coral-dp); }
+    .brand span { color: var(--signal); }
     .rail .spacer { flex: 1; }
     .stat { display: flex; align-items: center; gap: 6px; }
     .dot {
@@ -87,7 +45,7 @@
       background: var(--dim);
       flex: none;
     }
-    .dot.on { background: var(--coral-dp); animation: breathe 2.4s ease-in-out infinite; }
+    .dot.on { background: var(--signal); animation: breathe 2.4s ease-in-out infinite; }
     @keyframes breathe { 0%,100% { opacity: 1; } 50% { opacity: .25; } }
 
     /* ---------- 본문 그리드: 좌(대화) / 우(카메라) ---------- */
@@ -111,12 +69,12 @@
       padding: 16px 18px;
       overflow: hidden;
     }
-    /* 시그니처: 듣는 동안 위쪽 코랄 바가 호흡한다 */
+    /* 시그니처: 듣는 동안 위쪽 인디고 바가 호흡한다 */
     .heard::before {
       content: "";
       position: absolute; inset: 0 0 auto 0;
       height: 3px;
-      background: var(--coral);
+      background: var(--signal-lt);
       transform: scaleX(0);
       transform-origin: left;
       transition: transform .35s ease;
@@ -124,7 +82,7 @@
     .heard.live::before { transform: scaleX(1); animation: sweep 2.8s ease-in-out infinite; }
     @keyframes sweep { 0%,100% { opacity: .35; } 50% { opacity: 1; } }
 
-    .heard .tag { color: #6E747E; }
+    .heard .tag { color: var(--dim-ink); }
     .heard-head { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
     .heard-head .spacer { flex: 1; }
 
@@ -141,29 +99,29 @@
       word-break: keep-all;
     }
     #transcript .interim { opacity: .38; font-weight: 500; }
-    #transcript.empty { color: #5A606B; font-weight: 500; font-size: 15px; }
+    #transcript.empty { color: var(--dim-ink); font-weight: 500; font-size: 15px; }
 
     .heard hr {
-      border: 0; border-top: 1px solid rgba(242,240,235,.12);
+      border: 0; border-top: 1px solid var(--line-ink);
       margin: 12px 0 10px;
     }
     #ask-result {
       max-height: 34%;
       overflow-y: auto;
-      color: var(--coral);
+      color: var(--signal-lt);
       font-size: clamp(14px, 1.7vw, 17px);
       font-weight: 500;
       line-height: 1.5;
       white-space: pre-wrap;
       word-break: keep-all;
     }
-    #ask-result.error { color: #FF9B8F; }
+    #ask-result.error { color: var(--alert-lt); }
 
     .type-row { display: flex; gap: 8px; margin-top: 10px; }
     #ask-text {
       flex: 1; min-width: 0;
       background: var(--ink-2);
-      border: 1px solid rgba(242,240,235,.10);
+      border: 1px solid var(--line-ink);
       border-radius: 10px;
       color: var(--bone);
       font-family: var(--sans);
@@ -172,7 +130,7 @@
       resize: none;
       height: 34px;
     }
-    #ask-text::placeholder { color: #5A606B; }
+    #ask-text::placeholder { color: var(--dim-ink); }
 
     /* ---------- 좌하: 두 개의 주요 동작 ---------- */
     .actions {
@@ -181,35 +139,6 @@
       grid-template-columns: 1fr 1fr;
       gap: var(--gap);
     }
-    .big {
-      appearance: none;
-      border: 0;
-      border-radius: var(--r-panel);
-      background: var(--slate);
-      color: #fff;
-      font-family: var(--sans);
-      font-size: clamp(13px, 1.5vw, 15px);
-      font-weight: 650;
-      letter-spacing: -.01em;
-      padding: 18px 14px;
-      min-height: 74px;
-      text-align: left;
-      cursor: pointer;
-      transition: transform .12s ease, filter .12s ease;
-      display: flex; flex-direction: column; justify-content: space-between;
-    }
-    .big small {
-      display: block;
-      font-family: var(--mono);
-      font-size: 9px;
-      letter-spacing: .12em;
-      text-transform: uppercase;
-      opacity: .72;
-      margin-bottom: 8px;
-    }
-    .big:active { transform: scale(.98); filter: brightness(.94); }
-    .big:disabled { background: #B6BCBD; cursor: not-allowed; }
-
     /* ---------- 우: 카메라 ---------- */
     .cam {
       grid-column: 2; grid-row: 1 / span 2;
@@ -231,7 +160,7 @@
       min-height: 0;
       border-radius: 12px;
       overflow: hidden;
-      background: var(--coral);   /* 영상 오기 전 대기 상태 = 목업의 코랄 면 */
+      background: var(--signal);   /* 영상 오기 전 대기 상태 = 인디고 면 */
     }
     .stage > * {
       position: absolute; inset: 0;
@@ -256,13 +185,15 @@
       flex-direction: column;
       align-items: center; justify-content: center;
       gap: 12px;
-      background: var(--coral);
-      color: #4A211C;
+      background: var(--signal);
+      color: var(--signal-ink);
       text-align: center;
       padding: 20px;
       z-index: 3;
     }
     .veil.show { display: flex; }
+    /* 덮개는 인디고 면이므로 그 위 버튼만 따로 — 흰 알약에 인디고 글자 */
+    .veil-btn { background: var(--bone); border-color: var(--bone); color: var(--signal-dp); }
     .veil p { margin: 0; font-size: 13px; font-weight: 600; max-width: 24ch; word-break: keep-all; }
 
     /* 스캔 결과 시트 — 긴 문서 텍스트를 읽는 면 */
@@ -287,56 +218,17 @@
       word-break: keep-all;
       margin: 0;
     }
-    #doc-parse-result.error { color: #FF9B8F; }
+    #doc-parse-result.error { color: var(--alert-lt); }
     .sheet-foot { display: flex; gap: 8px; margin-top: 10px; }
-
-    /* ---------- 칩 버튼 ---------- */
-    .chip {
-      appearance: none;
-      border: 1px solid var(--line);
-      background: transparent;
-      color: var(--ink);
-      font-family: var(--mono);
-      font-size: 11px;
-      font-weight: 600;
-      letter-spacing: .04em;
-      border-radius: 999px;
-      padding: 6px 11px;
-      cursor: pointer;
-      white-space: nowrap;
-      transition: background .12s ease, color .12s ease, border-color .12s ease;
-    }
-    .chip:active { transform: scale(.97); }
-    .chip.on { background: var(--ink); color: var(--bone); border-color: var(--ink); }
-    .chip.accent { background: var(--slate); border-color: var(--slate); color: #fff; }
-    .chip.warn { color: var(--coral-dp); border-color: rgba(196,102,92,.4); }
-    .chip:disabled { opacity: .4; cursor: not-allowed; }
-    .sheet .chip, .heard .chip { border-color: rgba(242,240,235,.22); color: var(--bone); }
-    .sheet .chip.accent, .heard .chip.accent { background: var(--slate); border-color: var(--slate); }
-    .heard .chip.on { background: var(--coral); border-color: var(--coral); color: #2A100C; }
 
     .cam-foot { display: flex; gap: 6px; margin-top: 10px; flex-wrap: wrap; }
 
-    /* 상태 줄 — 화면 밖으로 밀지 않고 레일에 얹는다 */
-    #status { font-family: var(--mono); font-size: 10px; color: var(--dim); }
-    #status.error { color: var(--coral-dp); }
-    #status.ok { color: var(--slate-dp); }
-
-    #scan-status, #pick-status { font-family: var(--mono); font-size: 10px; color: var(--dim); }
-    #scan-status.error, #pick-status.error { color: var(--coral-dp); }
-
-    .banner {
-      background: #F6E7C8; color: #6B4E12;
-      border-radius: 10px; padding: 8px 10px;
-      font-size: 11px; margin-bottom: 8px;
-      word-break: keep-all;
-    }
-
+    /* 잉크 면 위 선택 상자 — 칩과 같은 크기·같은 둥근 모양으로 맞춘다 */
     select#ask-mode {
       appearance: none;
       background: var(--ink-2);
       color: var(--bone);
-      border: 1px solid rgba(242,240,235,.18);
+      border: 1px solid var(--line-ink);
       border-radius: 999px;
       font-family: var(--mono);
       font-size: 11px;
@@ -344,7 +236,20 @@
       cursor: pointer;
     }
 
-    :focus-visible { outline: 2px solid var(--slate-dp); outline-offset: 2px; }
+    /* 상태 줄 — 화면 밖으로 밀지 않고 레일에 얹는다 */
+    #status { font-family: var(--mono); font-size: 10px; color: var(--dim); }
+    #status.error { color: var(--alert); }
+    #status.ok { color: var(--signal-dp); }
+
+    #scan-status, #pick-status { font-family: var(--mono); font-size: 10px; color: var(--dim); }
+    #scan-status.error, #pick-status.error { color: var(--alert); }
+
+    .banner {
+      background: var(--alert-wash); color: var(--alert);
+      border-radius: 10px; padding: 8px 10px;
+      font-size: 11px; margin-bottom: 8px;
+      word-break: keep-all;
+    }
 
     /* ---------- 세로 모드: 세로 스택 ---------- */
     @media (orientation: portrait) {
@@ -353,9 +258,6 @@
       .heard { grid-column: 1; grid-row: auto; min-height: 34vh; }
       .cam   { grid-column: 1; grid-row: auto; min-height: 44vh; }
       .actions { grid-column: 1; grid-row: auto; }
-    }
-    @media (prefers-reduced-motion: reduce) {
-      * { animation: none !important; transition: none !important; }
     }
   </style>
 </head>
@@ -380,7 +282,7 @@
   <div class="grid">
 
     <!-- ===== 좌상: 듣는 면 ===== -->
-    <section class="heard" id="heard-panel">
+    <section class="heard on-ink" id="heard-panel">
       <div class="heard-head">
         <span class="tag">들은 말</span>
         <div class="spacer"></div>
@@ -388,6 +290,8 @@
           <option value="chat">대화</option>
           <option value="summary">요약</option>
         </select>
+        <a class="chip" id="cal-btn" href="{{ url_for('calendar_page') }}"
+           title="달력을 열어 일정을 보고 추가합니다">일정</a>
         <button class="chip" id="mic-btn">대화 시작</button>
       </div>
 
@@ -450,11 +354,11 @@
         <!-- 카메라 꺼짐 / 권한 필요 -->
         <div class="veil" id="cam-veil">
           <p id="veil-msg">카메라를 켜는 중입니다</p>
-          <button class="chip" id="start-btn" style="background:#4A211C;color:#F2F0EB;border-color:#4A211C">카메라 켜기</button>
+          <button class="chip veil-btn" id="start-btn">카메라 켜기</button>
         </div>
 
         <!-- 문서 읽기 결과 시트 -->
-        <div class="sheet" id="doc-sheet">
+        <div class="sheet on-ink" id="doc-sheet">
           <div class="sheet-head">
             <span class="tag">문서 내용</span>
             <div class="spacer"></div>
@@ -472,6 +376,9 @@
         <button class="chip accent" id="scan-btn">문서 스캔</button>
         <button class="chip" id="rescan-btn">다시 스캔</button>
         <button class="chip warn" id="stop-cam-btn">카메라 끄기</button>
+        <button class="chip on" id="gesture-btn" title="가위=스캔, 바위=대화, 보=카메라 끄기">제스처 켬</button>
+        <button class="chip" id="light-on-btn">불 켜기</button>
+        <button class="chip" id="light-off-btn">불 끄기</button>
         <span class="spacer" style="flex:1"></span>
         <span id="scan-status"></span>
         <span id="pick-status"></span>
@@ -574,6 +481,9 @@
       if (msg.type === "transcript") {
         document.getElementById("ask-text").value = msg.text;
         ask();
+      } else if (msg.type === "gesture") {
+        // 서버의 손 인식이 가위/바위/보를 확정했을 때 내려오는 명령.
+        handleGestureCommand(msg.action);
       } else if (msg.type === "error") {
         resultEl.textContent = "음성 인식 오류: " + msg.error;
         resultEl.className = "error";
@@ -598,10 +508,13 @@
     ctx.scale(-1, 1);
     ctx.drawImage(video, -vw / 2, -vh / 2, vw, vh);
     ctx.restore();
-    // 손 인식은 이 방향 보정이 끝난 캔버스에 대고 돈다(아래 9번 섹션) — 서버가
-    // 받는 프레임과 정확히 같은 좌표계(이미 정방향으로 회전/미러링됨)여야
-    // 랜드마크 좌표가 서버 쪽 계산과 어긋나지 않는다.
+    // 손/얼굴/몸 인식은 셋 다 이 방향 보정이 끝난 캔버스에 대고 돈다(아래
+    // 10번 섹션) — 서버가 받는 프레임과 정확히 같은 좌표계(이미 정방향으로
+    // 회전/미러링됨)여야 랜드마크 좌표가 서버 쪽 계산(깊이 추정·월드 변환·
+    // 제스처 판정)과 어긋나지 않는다.
     if (window.__sendHandLandmarks) window.__sendHandLandmarks(canvas, ws);
+    if (window.__sendFaceLandmarks) window.__sendFaceLandmarks(canvas, ws);
+    if (window.__sendBodyLandmarks) window.__sendBodyLandmarks(canvas, ws);
     canvas.toBlob((blob) => {
       if (blob && ws && ws.readyState === WebSocket.OPEN) {
         ws.send(blob);
@@ -682,6 +595,53 @@
   const askTextEl = document.getElementById("ask-text");
   const answerBlock = document.getElementById("answer-block");
 
+  // iOS Safari의 speechSynthesis는 "사용자 제스처 호출 스택 안"에서 speak()가
+  // 불려야만 소리를 낸다 — 이 앱의 TTS는 거의 다 `await fetch(...)` 뒤에
+  // speak()를 부르므로(Gemini 응답을 받은 다음에야 읽을 수 있으니 당연히
+  // 그렇다) 그 시점엔 이미 제스처 컨텍스트가 끊겨 iOS가 조용히 아무 것도
+  // 하지 않는다(에러도 안 남는다 — 그래서 "안 된다"로만 보인다). 페이지에서
+  // 처음 탭이 발생한 그 순간(동기 호출 스택 안)에 무음(volume=0) 발화를 한 번
+  // 실행해 두면, Web Audio unlock과 같은 원리로 그 뒤로는 같은 페이지 세션
+  // 안에서 비동기로 부르는 speak()도 정상 재생된다 — 매번 다시 unlock할
+  // 필요는 없다.
+  let ttsUnlocked = false;
+  function unlockSpeechSynthesis() {
+    if (ttsUnlocked || !('speechSynthesis' in window)) return;
+    ttsUnlocked = true;
+    const warmup = new SpeechSynthesisUtterance(" ");
+    warmup.volume = 0;
+    window.speechSynthesis.speak(warmup);
+  }
+  document.addEventListener("pointerdown", unlockSpeechSynthesis, { once: true });
+
+  // 한국어 음성을 명시적으로 골라 둔다 — voice를 안 정하고 lang="ko-KR"만
+  // 믿으면, 기기에 맞는 음성이 아직 로드되지 않았거나(iOS는 getVoices()가
+  // 비동기로 채워진다) 없는 경우 일부 iOS 버전에서 소리 없이 실패하는 사례가
+  // 있었다. voiceschanged 이후 다시 골라 캐시해 둔다.
+  let koVoice = null;
+  function pickKoreanVoice() {
+    if (!('speechSynthesis' in window)) return;
+    const voices = window.speechSynthesis.getVoices();
+    koVoice = voices.find(v => v.lang === "ko-KR") || voices.find(v => v.lang && v.lang.startsWith("ko")) || null;
+  }
+  if ('speechSynthesis' in window) {
+    pickKoreanVoice();
+    window.speechSynthesis.onvoiceschanged = pickKoreanVoice;
+  }
+
+  // 발화 중인 utterance를 여기 붙잡아 둔다 — WebKit은 다른 참조가 없는
+  // SpeechSynthesisUtterance를 말하는 도중에 가비지 컬렉트해서 소리가
+  // 중간에(또는 아예) 끊기는 알려진 버그가 있다. 지역 변수로만 두면 이
+  // 참조가 사라지므로, 끝날 때까지 모듈 스코프에 붙잡아 둔다.
+  let activeUtterance = null;
+  function makeUtterance(text) {
+    const utter = new SpeechSynthesisUtterance(text);
+    utter.lang = "ko-KR"; utter.rate = 1.0;
+    if (koVoice) utter.voice = koVoice;
+    activeUtterance = utter;
+    return utter;
+  }
+
   // 답이 비면 구분선과 라벨까지 접는다. 답을 쓰는 곳이 여러 군데라
   // 각 호출부를 고치는 대신 내용 변화를 관찰해 한 곳에서 처리한다.
   new MutationObserver(() => {
@@ -710,8 +670,7 @@
   function speak(text) {
     if (!('speechSynthesis' in window) || !text || !text.trim()) return;
     window.speechSynthesis.cancel();
-    const utter = new SpeechSynthesisUtterance(text);
-    utter.lang = "ko-KR"; utter.rate = 1.0;
+    const utter = makeUtterance(text);
     window.speechSynthesis.speak(utter);
   }
   function stopSpeak() { window.speechSynthesis.cancel(); }
@@ -795,7 +754,7 @@
   function speakThenResume(text) {
     if (!('speechSynthesis' in window) || !text || !text.trim()) { resumeListening(); return; }
     speaking = true; window.speechSynthesis.cancel();
-    const utter = new SpeechSynthesisUtterance(text); utter.lang = "ko-KR"; utter.rate = 1.0;
+    const utter = makeUtterance(text);
     const done = () => {
       if (speakWatchdog) { clearTimeout(speakWatchdog); speakWatchdog = null; }
       if (!speaking) return;
@@ -936,21 +895,21 @@
     pickStatus.className = scanDocs.length ? "" : "error";
   }
 
-  /** 고정 프레임 위에 문서 사각형과 번호를 다시 그린다. 선택된 것은 코랄색. */
+  /** 고정 프레임 위에 문서 사각형과 번호를 다시 그린다. 선택된 것은 강조색(인디고). */
   function scanRedraw() {
     const ctx = scanCanvas.getContext("2d");
     ctx.drawImage(scanFrozen, 0, 0);
     scanDocs.forEach(d => {
       const q = d.quad, sel = d.id === scanSelectedId;
       ctx.lineWidth = sel ? 10 : 5;
-      ctx.strokeStyle = sel ? "#E08A80" : "#F2F0EB";
+      ctx.strokeStyle = sel ? "#6F6AF5" : "#F1F2F5";
       ctx.beginPath();
       ctx.moveTo(q[0][0], q[0][1]);
       for (let i = 1; i < q.length; i++) ctx.lineTo(q[i][0], q[i][1]);
       ctx.closePath(); ctx.stroke();
       const cx = (q[0][0] + q[1][0] + q[2][0] + q[3][0]) / 4;
       const cy = (q[0][1] + q[1][1] + q[2][1] + q[3][1]) / 4;
-      ctx.fillStyle = sel ? "#E08A80" : "#F2F0EB";
+      ctx.fillStyle = sel ? "#6F6AF5" : "#F1F2F5";
       ctx.font = "bold 56px ui-monospace, monospace"; ctx.textAlign = "center";
       ctx.fillText(String(d.id), cx, cy);
     });
@@ -1102,6 +1061,17 @@
     const q = normCmd(qRaw);
     const inSelect = scanSelect.style.display !== "none";
 
+    // 일정/캘린더 명령이면 먼저 처리 (예: "오늘 일정 읽어줘"가 아래 '읽어줘' 재생과
+    // 겹치지 않도록 앞에 둔다).
+    if (handleCalendarCommand(qRaw)) return true;
+
+    // 조명 제어. '꺼/끄'를 '켜'보다 먼저 검사해야 한다 — "불 꺼줘"와 "불 켜줘"는
+    // 한 글자 차이라 순서를 바꾸면 서로를 잡아먹는다.
+    if (/불|조명|라이트|전등/.test(q)) {
+      if (/꺼|끄|소등/.test(q)) { runCommand(() => setLight("off"), "불 끌게요"); return true; }
+      if (/켜|키|점등/.test(q)) { runCommand(() => setLight("on"), "불 켤게요"); return true; }
+    }
+
     // 선택 화면에서 "N번" → 그 문서를 읽어줌
     if (inSelect) {
       const n = parseDocNumber(q);
@@ -1162,7 +1132,358 @@
   }
 
   /* =====================================================================
-     8. 페이지를 열면 카메라를 바로 켠다.
+     7.5 캘린더 / 일정 — 날짜별 일정 추가·삭제·조회 + 오늘 날짜/요일 안내.
+         날짜 해석("오늘/내일/다음 주 화요일/3월 5일")은 이 기기(폰)의 시계로
+         여기서 YYYY-MM-DD로 바꾸고, 서버(/api/calendar/*)는 확정된 날짜만
+         저장·조회하는 순수 저장소로 둔다. 음성·수동 UI 둘 다 같은 API를 쓴다.
+     ===================================================================== */
+  const WEEKDAYS = ["일", "월", "화", "수", "목", "금", "토"];
+  const REL_WORDS = new Set(["오늘", "내일", "내일모레", "낼모레", "낼", "모레", "글피",
+                             "어제", "그저께", "그제", "엊그제"]);
+
+  function atMidnight(d) { return new Date(d.getFullYear(), d.getMonth(), d.getDate()); }
+  function addDays(d, n) { const x = new Date(d); x.setDate(x.getDate() + n); return x; }
+  function fmtISO(d) {
+    return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0")
+         + "-" + String(d.getDate()).padStart(2, "0");
+  }
+  function fmtKor(d) { return (d.getMonth() + 1) + "월 " + d.getDate() + "일"; }
+  function korLabel(d) { return fmtKor(d) + " " + WEEKDAYS[d.getDay()] + "요일"; }
+  function isoToDate(iso) { const [y, m, d] = iso.split("-").map(Number); return new Date(y, m - 1, d); }
+  /** 받침 유무로 은/는을 붙인다. */
+  function josaEunNeun(w) {
+    const code = w.charCodeAt(w.length - 1);
+    const batchim = code >= 0xAC00 && code <= 0xD7A3 && (code - 0xAC00) % 28 !== 0;
+    return w + (batchim ? "은" : "는");
+  }
+
+  // ---- 자연어 → 날짜/시간 파싱 (Node로 사전 검증한 로직) ----
+  const REL = [["내일모레", 2], ["낼모레", 2], ["모레", 2], ["글피", 3],
+               ["내일", 1], ["낼", 1], ["오늘", 0],
+               ["그저께", -2], ["그제", -2], ["엊그제", -2], ["어제", -1]];
+  const WD_NAME = { "일": 0, "월": 1, "화": 2, "수": 3, "목": 4, "금": 5, "토": 6 };
+
+  /** raw에서 날짜 표현 하나를 찾아 상세 객체로. 없으면 null. */
+  function parseDatePhrase(raw, now) {
+    const today = atMidnight(now || new Date());
+    const info = (d, match) => ({
+      date: d, iso: fmtISO(d), label: korLabel(d),
+      dateOnly: fmtKor(d), weekday: WEEKDAYS[d.getDay()], match,
+    });
+
+    for (const [word, off] of REL) if (raw.includes(word)) return info(addDays(today, off), word);
+
+    let m = raw.match(/(\d{1,2})\s*월\s*(\d{1,2})\s*일/);
+    if (m) {
+      const mo = +m[1], day = +m[2];
+      if (mo >= 1 && mo <= 12 && day >= 1 && day <= 31) {
+        let d = new Date(today.getFullYear(), mo - 1, day);
+        if (d < today) d = new Date(today.getFullYear() + 1, mo - 1, day);
+        return info(d, m[0]);
+      }
+    }
+    m = raw.match(/(다음\s*주|담주|이번\s*주|이번주|돌아오는)?\s*([일월화수목금토])\s*요일/);
+    if (m) {
+      const nextWeek = /다음|담|돌아오는/.test(m[1] || "");
+      let delta = (WD_NAME[m[2]] - today.getDay() + 7) % 7;
+      if (nextWeek) delta += 7;
+      return info(addDays(today, delta), m[0]);
+    }
+    m = raw.match(/(\d{1,2})\s*일/);
+    if (m) {
+      const day = +m[1];
+      if (day >= 1 && day <= 31) {
+        let d = new Date(today.getFullYear(), today.getMonth(), day);
+        if (d < today) d = new Date(today.getFullYear(), today.getMonth() + 1, day);
+        return info(d, m[0]);
+      }
+    }
+    return null;
+  }
+
+  /** "이번 주"/"다음 주"(요일 없이) → {from,to,label}. 없으면 null. */
+  function parseWeekRange(raw, now) {
+    const today = atMidnight(now || new Date());
+    const nextWeek = /다음\s*주|담주/.test(raw);
+    const thisWeek = /이번\s*주|이번주|금주/.test(raw);
+    if (!nextWeek && !thisWeek) return null;
+    const dow = (today.getDay() + 6) % 7;           // 월=0 … 일=6
+    let monday = addDays(today, -dow);
+    if (nextWeek) monday = addDays(monday, 7);
+    return { from: fmtISO(monday), to: fmtISO(addDays(monday, 6)),
+             label: nextWeek ? "다음 주" : "이번 주" };
+  }
+
+  // 한글 고유어 시각("세 시" = 3시). STT가 숫자 대신 한글로 줄 때를 위해.
+  const NATIVE_H = { "한": 1, "두": 2, "세": 3, "네": 4, "다섯": 5, "여섯": 6,
+                     "일곱": 7, "여덟": 8, "아홉": 9, "열": 10, "열한": 11, "열두": 12 };
+  const _HWORD = "열두|열한|열|아홉|여덟|일곱|여섯|다섯|네|세|두|한";  // 긴 것 먼저
+  const _TIME_RE = new RegExp(
+    "(오전|오후|아침|저녁|밤|낮)?\\s*(\\d{1,2}|" + _HWORD + ")\\s*시"
+    + "(\\s*(\\d{1,2})\\s*분|\\s*반)?\\s*(에다가|에|쯤)?");
+
+  /** raw에서 시간 표현을 뽑아 {hhmm, match} 또는 null. */
+  function parseTimePhrase(raw) {
+    const m = raw.match(_TIME_RE);
+    if (!m) return null;
+    let h = /^\d/.test(m[2]) ? +m[2] : NATIVE_H[m[2]];
+    let min = 0;
+    if (m[3]) min = /반/.test(m[3]) ? 30 : +m[4];
+    if (/오후|저녁|밤/.test(m[1] || "") && h < 12) h += 12;
+    if (/오전|아침/.test(m[1] || "") && h === 12) h = 0;
+    if (h == null || h > 23 || min > 59) return null;
+    return { hhmm: String(h).padStart(2, "0") + ":" + String(min).padStart(2, "0"), match: m[0] };
+  }
+
+  // 제목에서 걷어낼 꼬리 명령 동사.
+  //  A등급: 어미 없이도 명령(제목 명사로 거의 안 쓰임). B등급: 동사 어미 있을 때만.
+  const _VA = "추가|등록|삭제|제거|취소|없애|기록";
+  const _VB = "예약|저장|잡아|넣어|빼|지워";
+  const _VE = "해\\s*주세요|해\\s*줘|해\\s*주라|해라|할래|하기|해|줘|주라";
+  const _TAIL = new RegExp("\\s*(을|를|좀)?\\s*(?:(?:" + _VA + ")(?:\\s*(?:" + _VE + "))?"
+                           + "|(?:" + _VB + ")\\s*(?:" + _VE + "))\\s*$");
+  const _TAIL_END = new RegExp("\\s*(?:" + _VE + ")\\s*$");
+
+  /** raw에서 날짜/시간/명령어/조사를 걷어내고 남은 일정 제목. */
+  function extractTitle(raw, dateMatch, timeMatch) {
+    let t = raw;
+    if (dateMatch) t = t.replace(dateMatch, " ");
+    if (timeMatch) t = t.replace(timeMatch, " ");
+    t = t.replace(/\s+/g, " ").trim();
+    let prev;
+    do { prev = t; t = t.replace(_TAIL, "").trim(); } while (t !== prev && t.length);
+    t = t.replace(_TAIL_END, "").trim();
+    t = t.replace(/^(에다가|에다|에|일정으로|일정에|일정|스케줄에|스케줄|약속으로)\s+/, "").trim();
+    t = t.replace(/\s*(에|은|는|을|를|이|가)\s*$/, "").trim();
+    return t;
+  }
+
+  /** "15:00" → "오후 3시", "09:30" → "오전 9시 30분" (음성 안내용). */
+  function timeToSpoken(hhmm) {
+    const [H, M] = hhmm.split(":").map(Number);
+    let h12 = H % 12; if (h12 === 0) h12 = 12;
+    return (H < 12 ? "오전 " : "오후 ") + h12 + "시" + (M ? " " + M + "분" : "");
+  }
+  /** 이벤트 한 건을 음성 문구로. withDate면 앞에 날짜를 붙인다. */
+  function eventPhrase(e, withDate) {
+    let s = "";
+    if (withDate) s += fmtKor(isoToDate(e.date)) + " ";
+    if (e.time) s += timeToSpoken(e.time) + " ";
+    return (s + e.title).trim();
+  }
+
+  // ---- 일정 화면으로 넘기기 ----
+  // 달력은 이 페이지의 모달이 아니라 전용 화면(/calendar)이다. 좁은 폰 화면에서
+  // 한 달치 달력과 카메라 영상을 같은 화면에 같이 놓으면 둘 다 작아지기만 해서,
+  // 달력이 화면 전체를 쓰도록 페이지를 나눴다.
+  //
+  // 넘어가는 순간 이 페이지가 내려가므로 카메라와 웹소켓 세션도 함께 끊긴다 —
+  // 돌아오면 자동으로 다시 켜진다(맨 아래 9번 섹션). 일정 화면에 머무는 동안은
+  // 팔이 영상을 받지 못해 추적이 멈추므로, 오래 머물 화면이 아니라는 전제다.
+  function calOpen() { location.href = "/calendar"; }
+
+  // 아래 두 개는 모달 시절의 흔적이다. 음성 명령 쪽(voiceAddEvent 등)이 계속
+  // 부르고 있어서, 그쪽 코드를 건드리지 않으려고 이름만 남겨 뒀다.
+  function calClose() { /* 전용 화면이라 여기서 닫을 것이 없다 */ }
+  function calRenderIfOpen() { /* 목록은 일정 화면이 열릴 때 스스로 불러온다 */ }
+
+  // ---- 음성으로 일정 추가/삭제/조회 (fetch 후 안내 음성 → 다시 듣기) ----
+  async function voiceAddEvent(dp, tp, title) {
+    processing = true; clearSilenceTimer();
+    try { recognition.stop(); } catch (e) {}
+    try {
+      const res = await fetch("/api/calendar/events", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ date: dp.iso, title, time: tp ? tp.hhmm : null }) });
+      const data = await res.json();
+      const msg = (!res.ok || data.error) ? "일정을 추가하지 못했어요"
+        : dp.dateOnly + (tp ? " " + timeToSpoken(tp.hhmm) : "") + " " + title + " 추가했어요";
+      resultEl.textContent = msg; resultEl.className = res.ok ? "" : "error";
+      calRenderIfOpen(); speakThenResume(msg);
+    } catch (e) { resultEl.textContent = "추가 요청 실패"; resultEl.className = "error"; resumeListening(); }
+  }
+  async function voiceRemoveEvent(dp, title) {
+    processing = true; clearSilenceTimer();
+    try { recognition.stop(); } catch (e) {}
+    const body = {};
+    if (dp) body.date = dp.iso;
+    if (title) body.query = title;
+    try {
+      const res = await fetch("/api/calendar/delete", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body) });
+      const data = await res.json();
+      let msg;
+      if (!res.ok || data.error) msg = "일정을 삭제하지 못했어요";
+      else if (!data.count) msg = (dp ? dp.dateOnly + "에 " : "") + (title || "해당") + " 일정을 못 찾았어요";
+      else msg = (data.count === 1 && data.removed[0])
+        ? data.removed[0].title + " 일정을 지웠어요"
+        : data.count + "개 일정을 지웠어요";
+      resultEl.textContent = msg; resultEl.className = res.ok ? "" : "error";
+      calRenderIfOpen(); speakThenResume(msg);
+    } catch (e) { resultEl.textContent = "삭제 요청 실패"; resultEl.className = "error"; resumeListening(); }
+  }
+  async function voiceQueryEvents(spec) {
+    processing = true; clearSilenceTimer();
+    try { recognition.stop(); } catch (e) {}
+    const url = spec.date ? "/api/calendar/events?date=" + spec.date
+                          : "/api/calendar/events?from=" + spec.from + "&to=" + spec.to;
+    try {
+      const res = await fetch(url);
+      const evs = (await res.json()).events || [];
+      let msg;
+      if (!evs.length) msg = spec.label + "에 일정이 없어요";
+      else {
+        const parts = evs.slice(0, 6).map(e => eventPhrase(e, !spec.date));
+        msg = spec.label + "에 일정이 " + evs.length + "개 있어요. " + parts.join(", ");
+        if (evs.length > 6) msg += " 그리고 몇 건 더 있어요";
+      }
+      resultEl.textContent = msg; resultEl.className = "";
+      calRenderIfOpen(); speakThenResume(msg);
+    } catch (e) { resultEl.textContent = "일정을 불러오지 못했어요"; resultEl.className = "error"; resumeListening(); }
+  }
+
+  /** 오늘/그 날짜의 요일·날짜를 말해준다(며칠/무슨 요일). */
+  function speakDateInfo(dp) {
+    const msg = REL_WORDS.has(dp.match)
+      ? josaEunNeun(dp.match) + " " + dp.dateOnly + " " + dp.weekday + "요일이에요"
+      : josaEunNeun(dp.dateOnly) + " " + dp.weekday + "요일이에요";
+    runCommand(null, msg);
+  }
+
+  /** 일정 관련 명령이면 실행하고 true, 아니면 false(→ 평소대로 Gemini). */
+  function handleCalendarCommand(qRaw) {
+    const raw = qRaw.trim();
+    const q = normCmd(qRaw);
+
+    // 캘린더 열기 / 닫기
+    if ((q.includes("캘린더") || q.includes("달력")) &&
+        (q.includes("열") || q.includes("보여") || q.includes("띄워") || q.includes("켜"))) {
+      runCommand(() => calOpen(), "일정 화면 열게요"); return true;
+    }
+    if ((q.includes("캘린더") || q.includes("달력")) && (q.includes("닫") || q.includes("꺼"))) {
+      runCommand(null, "일정 화면에서 뒤로가기를 눌러 주세요"); return true;
+    }
+
+    // 오늘 며칠 / 무슨 요일 / 날짜
+    if (q.includes("며칠") || q.includes("몇일") || (q.includes("무슨") && q.includes("요일"))
+        || (q.includes("무슨") && q.includes("날")) || ((q.includes("오늘") || q.includes("내일")) && q.includes("날짜"))) {
+      speakDateInfo(parseDatePhrase(raw) || parseDatePhrase("오늘")); return true;
+    }
+
+    const isAdd = /(추가|등록|기록|잡아|넣어)/.test(q) || /(예약|저장)해/.test(q);
+    const isRemove = /(삭제|제거|취소|지워|없애|빼줘|빼기)/.test(q);
+    const scheduleKW = /(일정|스케줄|스케쥴|약속|계획)/.test(q);
+    const dp = parseDatePhrase(raw);
+
+    if (isAdd) {
+      if (!dp) { runCommand(null, "언제로 추가할까요? 날짜를 같이 말해주세요"); return true; }
+      const tp = parseTimePhrase(raw);
+      const title = extractTitle(raw, dp.match, tp && tp.match);
+      if (!title) { runCommand(null, "무슨 일정인지 잘 못 들었어요. 다시 말해줄래요?"); return true; }
+      voiceAddEvent(dp, tp, title); return true;
+    }
+    if (isRemove && (scheduleKW || dp)) {
+      const tp = parseTimePhrase(raw);
+      const title = extractTitle(raw, dp && dp.match, tp && tp.match);
+      if (!dp && !title) { runCommand(null, "어떤 일정을 지울지 못 들었어요"); return true; }
+      voiceRemoveEvent(dp, title); return true;
+    }
+    if (scheduleKW && dp) { voiceQueryEvents({ date: dp.iso, label: dp.label }); return true; }
+    if (scheduleKW) {
+      const wr = parseWeekRange(raw);
+      if (wr) { voiceQueryEvents({ from: wr.from, to: wr.to, label: wr.label }); return true; }
+    }
+    return false;
+  }
+
+  /* =====================================================================
+     8. 제스처 명령 — 가위바위보가 확정되면 서버가 내려보내는 동작.
+        [병합] 판정 자체는 서버(perception/gesture.py)가 하지만, 그 입력은 아래
+        10번 섹션에서 이 폰이 올려보낸 손 랜드마크다 — 즉 인식은 폰, 판정은
+        서버, 실행은 다시 폰이다. 카메라·마이크·화면이 여기 있으므로 실행은
+        폰일 수밖에 없고, /ws/camera로 {type:"gesture", action:...} 한 줄이
+        내려오면 그대로 수행한다.
+        서버 쪽에서 이미 "같은 모양 N프레임 유지 + 쿨다운"으로 걸러 보내므로
+        여기서는 중복 방지를 다시 하지 않는다.
+     ===================================================================== */
+  /** 조명을 켜고 끈다.
+      파이(http://...:5000)를 여기서 직접 부르면 안 된다 — 이 페이지는 HTTPS라
+      브라우저가 혼합 콘텐츠(mixed content)로 차단한다. 메인 서버가 대신 파이를
+      호출하므로 여기서는 항상 같은 출처의 /api/light 를 부른다. */
+  async function setLight(state) {
+    try {
+      const res = await fetch("/api/light", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ state }),
+      });
+      const data = await res.json();
+      if (!res.ok || data.error) {
+        resultEl.textContent = "조명 제어 실패: " + (data.error || res.status);
+        resultEl.className = "error";
+        return false;
+      }
+      return true;
+    } catch (e) {
+      resultEl.textContent = "조명 요청이 실패했어요";
+      resultEl.className = "error";
+      return false;
+    }
+  }
+
+  document.getElementById("light-on-btn").addEventListener("click", () => setLight("on"));
+  document.getElementById("light-off-btn").addEventListener("click", () => setLight("off"));
+
+  const gestureBtn = document.getElementById("gesture-btn");
+  let gestureEnabled = true;
+
+  gestureBtn.addEventListener("click", () => {
+    gestureEnabled = !gestureEnabled;
+    gestureBtn.classList.toggle("on", gestureEnabled);
+    gestureBtn.textContent = gestureEnabled ? "제스처 켬" : "제스처 끔";
+  });
+
+  /** 상태줄에 잠깐 안내를 띄우고 원래 문구로 되돌린다. */
+  function gestureNote(text) {
+    setStatus(text, "ok");
+    setTimeout(() => { if (ws && ws.readyState === WebSocket.OPEN) setStatus("서버 연결됨", "ok"); }, 2500);
+  }
+
+  /** 대화 세션을 켠다. 이미 켜져 있으면 아무것도 하지 않는다(토글이 아니다). */
+  function startVoiceSession() {
+    if (!SpeechRecognition || micBtn.disabled || sessionActive) return false;
+    if (!window.isSecureContext) return false;
+    micBtn.click();   // 세션 시작 로직을 한 곳에만 두기 위해 버튼을 그대로 누른다
+    return true;
+  }
+
+  function handleGestureCommand(action) {
+    if (!gestureEnabled) return;
+
+    // 안내 음성은 항상 runCommand/speakThenResume를 거친다. 대화 세션이 켜져
+    // 있을 때 그냥 speak()로 말하면 그 소리가 마이크로 다시 들어가 자기 말을
+    // 질문으로 인식해버리는데, 이 두 함수는 speaking 플래그로 그동안의 인식
+    // 결과를 버리고 다 읽은 뒤 깨끗한 상태로 듣기를 재개한다.
+    if (action === "scan") {                     // 가위
+      if (!captureTimer) return;                 // 카메라가 꺼져 있으면 무시
+      gestureNote("가위 — 스캔");
+      runCommand(() => scanBtn.click(), "스캔할게요");
+
+    } else if (action === "voice") {             // 바위
+      if (sessionActive) { gestureNote("바위 — 이미 듣는 중"); return; }
+      if (!startVoiceSession()) { gestureNote("음성 인식을 쓸 수 없습니다"); return; }
+      gestureNote("바위 — 대화 시작");
+      speakThenResume("네, 말씀하세요");
+
+    } else if (action === "camera_off") {        // 보
+      if (!captureTimer) return;
+      gestureNote("보 — 카메라 끄기");
+      runCommand(() => stopCamera(), "카메라 끌게요");
+    }
+  }
+
+  /* =====================================================================
+     9. 페이지를 열면 카메라를 바로 켠다.
         권한 프롬프트가 사용자 동작을 요구하는 브라우저에서는 실패하므로,
         그때는 덮개의 "카메라 켜기" 버튼으로 넘어간다.
      ===================================================================== */
@@ -1173,45 +1494,113 @@
 
 <script type="module">
   /* =====================================================================
-     9. 손 인식 — 휴대폰에서 직접 MediaPipe Tasks Vision(HandLandmarker)을
-        돌려서 21개 랜드마크만(이미지 자체가 아니라 좌표만) 웹소켓으로 보낸다.
+     10. 손/얼굴/몸 인식 — 휴대폰에서 직접 MediaPipe Tasks Vision
+        (HandLandmarker + FaceLandmarker + PoseLandmarker)을 돌려서
+        좌표만(이미지 자체가 아니라) 웹소켓으로 보낸다.
 
-        원래는 서버(컴퓨터)가 얼굴 인식과 손 인식을 둘 다 mediapipe(Python)로
-        처리했는데, 컴퓨터 하나가 두 모델 추론 + matplotlib 3D 렌더링 +
-        하드웨어 제어까지 매 프레임 다 하려니 폰이 실제로 보내는 프레임레이트
-        (~20fps, 위 FRAME_INTERVAL_MS)를 못 따라가서 로봇 반응이 느려지고
-        뚝뚝 끊겼다. 그래서 손 인식은 폰이 직접(로컬) 하고, 서버는 얼굴 인식
-        (mediapipe FaceMesh)만 전담한다 — perception/hand_tracker.py,
-        src/api/camera.py 참고.
+        원래는 서버(컴퓨터)가 얼굴/손/몸(어깨, 얼굴 인식 실패 시 폴백) 인식을
+        전부 mediapipe(Python)로 처리했는데, 컴퓨터 하나가 여러 모델 추론 +
+        matplotlib 3D 렌더링 + 하드웨어 제어까지 매 프레임 다 하려니 폰이
+        실제로 보내는 프레임레이트(~20fps, 위 FRAME_INTERVAL_MS)를 못 따라가서
+        로봇 반응이 느려지고 뚝뚝 끊겼다. 그래서 손 → 얼굴 → 몸 순서로 셋 다
+        폰이 직접(로컬) 하도록 옮겼다 — 얼굴은 그것 말고도 서버가 받는
+        프레임이 JPEG 압축 + 다운스케일을 거쳐 화질이 떨어지는 바람에 인식
+        자체가 잘 안 되는 문제도 있었는데, 압축 전 원본 영상에서 직접
+        인식하면 그 문제도 같이 없어진다. 서버(컴퓨터)는 이제 셋 중 어느
+        것도 모델 추론을 하지 않는다 — perception/hand_tracker.py,
+        perception/face_tracker.py, perception/body_tracker.py,
+        src/api/camera.py 참고. mediapipe(Python)는 더 이상 이 프로젝트의
+        의존성이 아니다.
+
+        [병합] 손 랜드마크는 서버에서 두 갈래로 쓰인다:
+          ① perception/follow_controller.py — 팔이 손을 따라가는 추종
+          ② perception/gesture.py           — 가위바위보 판정(위 8번 섹션)
+        아래 HAND_TRACKING_ENABLED는 그 둘의 **입력 자체**(랜드마크 전송)를
+        끄는 스위치다 — false면 손 추종과 제스처가 함께 꺼진다. 팔이 손을
+        따라가는 것"만" 끄고 싶다면(가위바위보는 계속 쓰고 싶을 때) 여기가
+        아니라 서버 쪽 `fundamental.const.FollowControllerConst.HAND_FOLLOW_ENABLED`를
+        False로 두는 게 맞다 — 그러면 손 랜드마크는 계속 전송/인식되어
+        제스처는 그대로 동작하고, `FollowController`만 그 위치로 팔을
+        움직이지 않는다. 얼굴/몸 랜드마크는 팔 추종에만 쓰이므로
+        FACE_TRACKING_ENABLED/POSE_TRACKING_ENABLED는 독립적으로 켜고 끌 수
+        있다 — 다 꺼도 idle 두리번거림, 그리고 버튼·음성으로 하는 모든 웹
+        기능은 그대로 동작한다.
 
         위 1번 섹션의 captureLoop()이 방향 보정(회전 + 좌우 미러링)까지 끝낸
-        캡처 캔버스(#capture)에 대고 돌린다 — 서버가 받는 좌표계와 똑같은
-        기준이어야 랜드마크 좌표가 서버 쪽 깊이 추정/월드 변환과 어긋나지
-        않는다. 이 스크립트가 로드/초기화에 실패해도(오프라인, 구형 브라우저,
-        CDN 접근 불가 등) 조용히 비활성으로 남는다 — 손 인식 없이 얼굴 인식/
-        idle 두리번거림만으로 계속 동작한다(perception 패키지의 "부분 실패"
-        관례와 같은 정신).
+        캡처 캔버스(#capture)에 대고 셋 다 돌린다 — 서버가 받는 좌표계와
+        똑같은 기준이어야 랜드마크 좌표가 서버 쪽 깊이 추정/월드 변환과
+        어긋나지 않는다. 이 스크립트가 로드/초기화에 실패해도(오프라인, 구형
+        브라우저, CDN 접근 불가 등) 조용히 비활성으로 남는다 — 손/얼굴/몸
+        인식 없이 idle 두리번거림만으로 계속 동작한다(perception 패키지의
+        "부분 실패" 관례와 같은 정신). 셋의 초기화 실패는 서로 독립적이다 —
+        하나가 실패해도 나머지는 계속 시도한다.
      ===================================================================== */
   import {
     HandLandmarker,
+    FaceLandmarker,
+    PoseLandmarker,
     FilesetResolver,
   } from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.21";
 
-  // 손 추적을 통째로 끄는 스위치. false면 HandLandmarker 자체를 로드/초기화
-  // 하지 않는다(폰 배터리/CPU도 아낌) — 서버는 hand_landmarks 메시지를 아예
-  // 못 받으므로 perception.follow_controller.FollowController는 "손 없음"과
-  // 똑같이 동작해 얼굴 추적/idle 두리번거림만 남는다(서버 쪽은 손댈 필요
-  // 없음). 다시 켜려면 true로.
-  const HAND_TRACKING_ENABLED = false;
+  // 손 인식 자체(랜드마크 전송)를 통째로 끄는 스위치. false면 HandLandmarker
+  // 자체를 로드/초기화하지 않는다(폰 배터리/CPU도 아낌) — 이러면 손 추종과
+  // 제스처(가위바위보)가 함께 비활성이 된다(둘 다 같은 랜드마크를 쓰므로).
+  // "팔이 손을 따라가는 것만" 끄고 싶다면(제스처는 계속 쓰고 싶을 때) 여기를
+  // 건드리지 말고 서버 쪽 FollowControllerConst.HAND_FOLLOW_ENABLED를 끌 것 —
+  // 위 주석 참고.
+  const HAND_TRACKING_ENABLED = true;
+  // 얼굴 추적 스위치. false면 FaceLandmarker를 로드/초기화하지 않는다 —
+  // 서버는 "얼굴 없음"과 똑같이 동작해 몸/손 추종·idle 두리번거림만 남는다.
+  const FACE_TRACKING_ENABLED = true;
+  // 몸(어깨) 추적 스위치 — 얼굴 인식 실패(옆모습 등) 시 폴백. false면
+  // PoseLandmarker를 로드/초기화하지 않는다 — 서버는 "몸 없음"과 똑같이
+  // 동작해 얼굴이 안 보이면 곧장 손/idle로 넘어간다.
+  const POSE_TRACKING_ENABLED = true;
 
   const TASKS_VISION_WASM_URL =
     "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.21/wasm";
   const HAND_MODEL_URL =
     "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/latest/hand_landmarker.task";
+  const FACE_MODEL_URL =
+    "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/latest/face_landmarker.task";
+  // lite 변형을 쓴다 — 이건 얼굴 인식이 실패했을 때만 쓰는 폴백이라 최고
+  // 정확도보다 속도/배터리가 더 중요하다(서버측 BodyTracker가 쓰던
+  // model_complexity=0과 같은 이유, perception/body_tracker.py 참고).
+  const POSE_MODEL_URL =
+    "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/latest/pose_landmarker_lite.task";
+
+  // FaceTracker가 실제로 쓰는 랜드마크 인덱스 — MediaPipe 얼굴 모델의 표준
+  // 468/478점 위상에서 코끝 근처(1)와 양쪽 눈 바깥쪽 끝(33=오른쪽,
+  // 263=왼쪽)이다. fundamental.const.FaceTrackerConst와 반드시 맞춰야
+  // 한다(둘 중 하나만 바꾸면 서버 깊이 추정이 엉뚱한 랜드마크를 쓰게 된다).
+  // 468점 전체를 보내지 않고 이 3개만 뽑아 보내는 이유는 대역폭 절약 —
+  // FaceTracker/FaceFollower가 필요로 하는 건 이 3점뿐이다.
+  const FACE_CENTER_LANDMARK = 1;
+  const FACE_LEFT_EYE_OUTER = 33;
+  const FACE_RIGHT_EYE_OUTER = 263;
+
+  // BodyTracker가 실제로 쓰는 랜드마크 인덱스 — mediapipe Pose 표준 33점
+  // 위상에서 양쪽 어깨다. fundamental.const.BodyTrackerConst와 반드시
+  // 맞춰야 한다(FACE_CENTER_LANDMARK 등과 같은 이유).
+  const POSE_LEFT_SHOULDER = 11;
+  const POSE_RIGHT_SHOULDER = 12;
+  // 어깨 랜드마크의 visibility(0~1)가 이보다 낮으면(다른 신체 부위/물체에
+  // 가려짐, 옆모습에서 반대쪽 어깨 등) 신뢰하지 않고 이번 프레임엔 몸을 아예
+  // 보내지 않는다 — fundamental.const.BodyTrackerConst.MIN_LANDMARK_VISIBILITY와
+  // 반드시 맞춰야 한다. Tasks Vision의 일부 버전은 visibility를 안 채우기도
+  // 하는데, 그때는 undefined로 남으므로 "실패 열림"(무조건 통과)으로 둔다 —
+  // 이 폴백 자체가 이미 얼굴 인식 실패 시에만 쓰이므로, 신뢰도 필터 없이
+  // 지나가는 쪽이 아예 몸 추종을 잃는 쪽보다 낫다.
+  const POSE_MIN_SHOULDER_VISIBILITY = 0.5;
 
   let handLandmarker = null;
   let handLandmarkerReady = false;
+  let faceLandmarker = null;
+  let faceLandmarkerReady = false;
+  let poseLandmarker = null;
+  let poseLandmarkerReady = false;
 
+  /** 지정한 실행 방식(GPU/CPU)으로 HandLandmarker 인스턴스를 만든다. */
   async function createHandLandmarker(vision, delegate) {
     return HandLandmarker.createFromOptions(vision, {
       baseOptions: { modelAssetPath: HAND_MODEL_URL, delegate },
@@ -1220,19 +1609,72 @@
     });
   }
 
+  /** 지정한 실행 방식(GPU/CPU)으로 FaceLandmarker 인스턴스를 만든다. */
+  async function createFaceLandmarker(vision, delegate) {
+    return FaceLandmarker.createFromOptions(vision, {
+      baseOptions: { modelAssetPath: FACE_MODEL_URL, delegate },
+      numFaces: 1,
+      runningMode: "VIDEO",
+    });
+  }
+
+  /** 지정한 실행 방식(GPU/CPU)으로 PoseLandmarker 인스턴스를 만든다. */
+  async function createPoseLandmarker(vision, delegate) {
+    return PoseLandmarker.createFromOptions(vision, {
+      baseOptions: { modelAssetPath: POSE_MODEL_URL, delegate },
+      numPoses: 1,
+      runningMode: "VIDEO",
+    });
+  }
+
   (async () => {
-    if (!HAND_TRACKING_ENABLED) return;
+    if (!HAND_TRACKING_ENABLED && !FACE_TRACKING_ENABLED && !POSE_TRACKING_ENABLED) return;
+    let vision;
     try {
-      const vision = await FilesetResolver.forVisionTasks(TASKS_VISION_WASM_URL);
-      try {
-        handLandmarker = await createHandLandmarker(vision, "GPU");
-      } catch (e) {
-        // 일부 브라우저/기기는 GPU delegate를 못 쓴다 — CPU로 재시도.
-        handLandmarker = await createHandLandmarker(vision, "CPU");
-      }
-      handLandmarkerReady = true;
+      vision = await FilesetResolver.forVisionTasks(TASKS_VISION_WASM_URL);
     } catch (e) {
-      console.warn("HandLandmarker unavailable, hand tracking disabled:", e);
+      console.warn("MediaPipe Tasks Vision runtime unavailable, hand/face/pose tracking disabled:", e);
+      return;
+    }
+
+    if (HAND_TRACKING_ENABLED) {
+      try {
+        try {
+          handLandmarker = await createHandLandmarker(vision, "GPU");
+        } catch (e) {
+          // 일부 브라우저/기기는 GPU delegate를 못 쓴다 — CPU로 재시도.
+          handLandmarker = await createHandLandmarker(vision, "CPU");
+        }
+        handLandmarkerReady = true;
+      } catch (e) {
+        console.warn("HandLandmarker unavailable, hand tracking disabled:", e);
+      }
+    }
+
+    if (FACE_TRACKING_ENABLED) {
+      try {
+        try {
+          faceLandmarker = await createFaceLandmarker(vision, "GPU");
+        } catch (e) {
+          faceLandmarker = await createFaceLandmarker(vision, "CPU");
+        }
+        faceLandmarkerReady = true;
+      } catch (e) {
+        console.warn("FaceLandmarker unavailable, face tracking disabled:", e);
+      }
+    }
+
+    if (POSE_TRACKING_ENABLED) {
+      try {
+        try {
+          poseLandmarker = await createPoseLandmarker(vision, "GPU");
+        } catch (e) {
+          poseLandmarker = await createPoseLandmarker(vision, "CPU");
+        }
+        poseLandmarkerReady = true;
+      } catch (e) {
+        console.warn("PoseLandmarker unavailable, body tracking disabled:", e);
+      }
     }
   })();
 
@@ -1253,6 +1695,61 @@
       type: "hand_landmarks",
       landmarks: landmarks.map((hand) => hand.map((p) => [p.x, p.y, p.z])),
     }));
+  };
+
+  /** 위와 같은 이유로 매 프레임 호출된다. 얼굴이 없어도 빈 배열을 그대로
+   * 보낸다(src/api/camera.py의 Camera.latest_face_landmarks 참고). 468/478개
+   * 전체 랜드마크가 아니라 FaceTracker가 실제로 쓰는 3개(코끝 + 양쪽 눈
+   * 바깥쪽 끝)만 이름 붙여 보낸다 — perception/face_tracker.py의
+   * process_landmarks()가 기대하는 모양과 정확히 맞아야 한다. */
+  window.__sendFaceLandmarks = function (canvasEl, wsConn) {
+    if (!faceLandmarkerReady || !wsConn || wsConn.readyState !== WebSocket.OPEN) return;
+    let result;
+    try {
+      result = faceLandmarker.detectForVideo(canvasEl, performance.now());
+    } catch (e) {
+      return;
+    }
+    const facesRaw = (result && result.faceLandmarks) || [];
+    const faces = facesRaw.map((lm) => ({
+      center: [lm[FACE_CENTER_LANDMARK].x, lm[FACE_CENTER_LANDMARK].y, lm[FACE_CENTER_LANDMARK].z],
+      left_eye_outer: [lm[FACE_LEFT_EYE_OUTER].x, lm[FACE_LEFT_EYE_OUTER].y, lm[FACE_LEFT_EYE_OUTER].z],
+      right_eye_outer: [lm[FACE_RIGHT_EYE_OUTER].x, lm[FACE_RIGHT_EYE_OUTER].y, lm[FACE_RIGHT_EYE_OUTER].z],
+    }));
+    wsConn.send(JSON.stringify({ type: "face_landmarks", faces }));
+  };
+
+  /** 위와 같은 이유로 매 프레임 호출된다(얼굴 인식 실패 폴백). 몸이 없어도
+   * 빈 배열을 그대로 보낸다(src/api/camera.py의 Camera.latest_body_landmarks
+   * 참고). 33점 전체가 아니라 BodyTracker가 실제로 쓰는 어깨 2개만 이름
+   * 붙여 보낸다 — perception/body_tracker.py의 process_landmarks()가
+   * 기대하는 모양과 정확히 맞아야 한다. 어깨 신뢰도(visibility)가 낮으면
+   * (옆모습 등, 서버 mediapipe Pose가 하던 판정과 같은 기준) 이 포즈 자체를
+   * 결과에서 뺀다 — 신뢰도 판정 자체가 폰으로 옮겨왔으므로 서버는 받은 걸
+   * 그대로 믿는다. */
+  window.__sendBodyLandmarks = function (canvasEl, wsConn) {
+    if (!poseLandmarkerReady || !wsConn || wsConn.readyState !== WebSocket.OPEN) return;
+    let result;
+    try {
+      result = poseLandmarker.detectForVideo(canvasEl, performance.now());
+    } catch (e) {
+      return;
+    }
+    const posesRaw = (result && result.landmarks) || [];
+    const bodies = [];
+    for (const lm of posesRaw) {
+      const left = lm[POSE_LEFT_SHOULDER];
+      const right = lm[POSE_RIGHT_SHOULDER];
+      if (!left || !right) continue;
+      const leftVisible = left.visibility === undefined || left.visibility >= POSE_MIN_SHOULDER_VISIBILITY;
+      const rightVisible = right.visibility === undefined || right.visibility >= POSE_MIN_SHOULDER_VISIBILITY;
+      if (!leftVisible || !rightVisible) continue;
+      bodies.push({
+        left_shoulder: [left.x, left.y, left.z],
+        right_shoulder: [right.x, right.y, right.z],
+      });
+    }
+    wsConn.send(JSON.stringify({ type: "body_landmarks", bodies }));
   };
 </script>
 </body>

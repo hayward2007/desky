@@ -1,0 +1,507 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#EDEEF1">
+  <title>desky — 일정</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='theme.css') }}">
+  <style>
+    /* ===================================================================
+       desky 일정 화면 — 한 달치 달력이 화면의 주인공인 전용 페이지.
+
+       모바일 화면(/mobile)의 모달이던 것을 페이지로 분리했다. 좁은 폰 화면에서
+       달력과 카메라 영상을 나란히 두면 둘 다 작아지기만 하기 때문이다.
+
+       색은 static/theme.css의 공통 팔레트를 그대로 쓴다 — 무채색 골격에
+       인디고 하나. 이 화면에서 인디고가 붙는 자리는 셋뿐이다:
+       오늘 날짜, 고른 날짜, 일정이 있다는 표시(점). 나머지는 전부 회색조다.
+       =================================================================== */
+
+    /* ---------- 전체 배치: 좌(달력) / 우(고른 날) ---------- */
+    .page {
+      height: 100%;
+      display: grid;
+      grid-template-rows: auto 1fr;
+      gap: var(--gap);
+      padding: calc(var(--gap) + env(safe-area-inset-top)) var(--gap)
+               calc(var(--gap) + env(safe-area-inset-bottom));
+    }
+
+    .rail { display: flex; align-items: center; gap: 12px; padding: 0 4px; min-height: 22px; }
+    .rail .spacer { flex: 1; }
+    .brand { font-weight: 700; font-size: 15px; letter-spacing: -.02em; }
+    .brand span { color: var(--signal); }
+
+    .body {
+      display: grid;
+      grid-template-columns: 1fr minmax(240px, 30%);
+      gap: var(--gap);
+      min-height: 0;
+    }
+
+    /* ---------- 달력 판 ---------- */
+    .cal {
+      background: var(--panel);
+      border-radius: var(--r-panel);
+      padding: 16px 18px;
+      display: flex;
+      flex-direction: column;
+      min-height: 0;
+    }
+    .cal-head { display: flex; align-items: center; gap: 10px; margin-bottom: 14px; }
+    .cal-head .spacer { flex: 1; }
+    .month {
+      font-size: clamp(20px, 2.6vw, 28px);
+      font-weight: 700;
+      letter-spacing: -.02em;
+      line-height: 1;
+    }
+    .month .yr {
+      font-family: var(--mono);
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--dim);
+      margin-left: 8px;
+      letter-spacing: .06em;
+    }
+
+    /* 요일 머리 + 날짜 칸이 같은 7열 격자를 공유한다 */
+    .dow, .grid {
+      display: grid;
+      grid-template-columns: repeat(7, 1fr);
+      gap: 4px;
+    }
+    .dow { margin-bottom: 6px; }
+    .dow span {
+      text-align: center;
+      font-family: var(--mono);
+      font-size: 10px;
+      font-weight: 600;
+      letter-spacing: .1em;
+      color: var(--dim);
+      padding-bottom: 4px;
+    }
+    .dow span:first-child, .dow span:last-child { color: var(--graphite-dp); }
+
+    .grid { flex: 1; min-height: 0; grid-auto-rows: 1fr; }
+
+    /* 날짜 한 칸 — 숫자 + 일정 미리보기 두 줄까지 */
+    .day {
+      position: relative;
+      border: 1px solid var(--line);
+      border-radius: var(--r-card);
+      background: var(--panel);
+      padding: 6px 7px;
+      min-height: 0;
+      overflow: hidden;
+      cursor: pointer;
+      text-align: left;
+      font-family: var(--sans);
+      display: flex;
+      flex-direction: column;
+      gap: 3px;
+      transition: border-color .12s ease, background .12s ease;
+    }
+    .day:hover { border-color: var(--dim); }
+    .day .d {
+      font-family: var(--mono);
+      font-variant-numeric: tabular-nums;
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--ink);
+      line-height: 1;
+    }
+    .day.out { background: transparent; border-color: transparent; }
+    .day.out .d { color: var(--faint); }
+    .day.out .ev { opacity: .5; }
+    .day.sun .d { color: var(--graphite-dp); }
+
+    /* 오늘: 인디고 테두리 + 숫자에 인디고 원 */
+    .day.today { border-color: var(--signal); }
+    .day.today .d {
+      color: #fff;
+      background: var(--signal);
+      border-radius: 999px;
+      padding: 3px 6px;
+      align-self: flex-start;
+      margin: -1px 0 1px -1px;
+    }
+    /* 고른 날: 잉크 면으로 반전 — 오늘과 겹쳐도 서로 구분된다 */
+    .day.picked { background: var(--ink); border-color: var(--ink); }
+    .day.picked .d { color: var(--bone); }
+    .day.picked.today .d { background: var(--signal-lt); color: #fff; }
+    .day.picked .ev { background: var(--ink-3); color: var(--bone); }
+    .day.picked .more { color: var(--dim-ink); }
+
+    /* 칸 안의 일정 한 줄 */
+    .ev {
+      background: var(--signal-wash);
+      color: var(--signal-dp);
+      border-radius: 5px;
+      padding: 2px 5px;
+      font-size: 10.5px;
+      font-weight: 600;
+      line-height: 1.25;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .ev .t { font-family: var(--mono); font-size: 9px; opacity: .75; margin-right: 3px; }
+    .more { font-family: var(--mono); font-size: 9px; color: var(--dim); padding-left: 2px; }
+
+    /* ---------- 오른쪽: 고른 날의 일정 + 추가 ---------- */
+    .side {
+      background: var(--ink);
+      color: var(--bone);
+      border-radius: var(--r-panel);
+      padding: 16px 16px 14px;
+      display: flex;
+      flex-direction: column;
+      min-height: 0;
+    }
+    .side-head { margin-bottom: 12px; }
+    .side-date { font-size: 19px; font-weight: 700; letter-spacing: -.01em; margin-top: 3px; }
+    .side-date .wd { color: var(--signal-lt); }
+
+    .list { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 6px; }
+    .empty { color: var(--dim-ink); font-size: 13px; padding: 14px 2px; line-height: 1.6; word-break: keep-all; }
+
+    .row {
+      display: flex; align-items: center; gap: 10px;
+      background: var(--ink-2);
+      border-radius: 10px;
+      padding: 9px 11px;
+    }
+    .row .t {
+      font-family: var(--mono); font-variant-numeric: tabular-nums;
+      font-size: 12px; color: var(--signal-lt);
+      flex: 0 0 auto; width: 42px;
+    }
+    .row .t.allday { color: var(--dim-ink); }
+    .row .txt { flex: 1; min-width: 0; font-size: 14px; font-weight: 500; word-break: keep-all; }
+    .row .del {
+      appearance: none; border: 0; background: transparent;
+      color: var(--dim-ink); font-size: 17px; line-height: 1; cursor: pointer;
+      padding: 2px 4px; flex: 0 0 auto;
+    }
+    .row .del:hover, .row .del:focus-visible { color: var(--alert-lt); }
+
+    /* 추가 폼 — 잉크 면 위이므로 입력창도 어둡게 */
+    .add { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 12px; }
+    .add .field {
+      background: var(--ink-2);
+      border-color: var(--line-ink);
+      color: var(--bone);
+      color-scheme: dark;
+    }
+    .add .field::placeholder { color: var(--dim-ink); }
+    .add #new-time { flex: 0 0 92px; }
+    .add #new-title { flex: 1 1 120px; min-width: 0; }
+    .add #new-title:focus { border-color: var(--signal-lt); }
+
+    .hint {
+      margin-top: 10px;
+      font-size: 11px; color: var(--dim-ink); line-height: 1.65;
+      word-break: keep-all;
+    }
+    .hint b { color: var(--bone); font-weight: 600; }
+
+    /* ---------- 세로 모드: 달력 위, 고른 날 아래 ---------- */
+    @media (orientation: portrait) {
+      .page { height: auto; min-height: 100%; }
+      .body { grid-template-columns: 1fr; }
+      .cal { min-height: 58vh; }
+      .grid { grid-auto-rows: minmax(52px, 1fr); }
+    }
+  </style>
+</head>
+<body>
+<div class="page">
+
+  <!-- ===== 상단 레일 ===== -->
+  <div class="rail">
+    <a class="chip" href="{{ url_for('mobile') }}" aria-label="로봇 시야로 돌아가기">← 뒤로</a>
+    <div class="brand">desky<span>.</span></div>
+    <span class="tag">일정</span>
+    <div class="spacer"></div>
+    <span class="tag num" id="today-label">—</span>
+  </div>
+
+  <div class="body">
+
+    <!-- ===== 좌: 한 달 달력 ===== -->
+    <section class="cal">
+      <div class="cal-head">
+        <div class="month" id="month-label">—</div>
+        <div class="spacer"></div>
+        <button class="chip" id="prev-btn" aria-label="이전 달">‹</button>
+        <button class="chip" id="today-btn">오늘</button>
+        <button class="chip" id="next-btn" aria-label="다음 달">›</button>
+      </div>
+
+      <div class="dow">
+        <span>일</span><span>월</span><span>화</span><span>수</span>
+        <span>목</span><span>금</span><span>토</span>
+      </div>
+      <div class="grid" id="grid"></div>
+    </section>
+
+    <!-- ===== 우: 고른 날의 일정 ===== -->
+    <aside class="side on-ink">
+      <div class="side-head">
+        <span class="tag">고른 날</span>
+        <div class="side-date" id="side-date">—</div>
+      </div>
+
+      <div class="list" id="list"></div>
+
+      <div class="add">
+        <input class="field" type="time" id="new-time" aria-label="시간(선택)">
+        <input class="field" type="text" id="new-title" placeholder="무슨 일정인가요" aria-label="일정 내용">
+        <button class="chip on" id="add-btn">추가</button>
+      </div>
+
+      <div class="hint">
+        로봇 시야 화면에서 말로도 됩니다 —
+        <b>“내일 오후 세시에 회의 추가해줘”</b>, <b>“이번 주 일정 알려줘”</b>,
+        <b>“삼월 오일 치과 예약 삭제”</b>
+      </div>
+    </aside>
+
+  </div>
+</div>
+
+<script>
+  /* =====================================================================
+     일정 화면 — 한 달 격자를 그리고, 고른 날의 일정을 다루는 화면.
+
+     서버(/api/calendar/*)는 확정된 날짜(YYYY-MM-DD)만 저장하는 순수 저장소이고,
+     "오늘이 며칠인가"는 이 기기의 시계로 여기서 정한다 — /mobile의 음성 명령이
+     쓰는 규칙과 같다(서버와 폰의 시간대가 달라도 '오늘'이 어긋나지 않게).
+
+     한 달을 그릴 때마다 그 달 전체를 한 번에 받아 온다(?from=&to=). 날짜 칸
+     42개마다 따로 요청하면 같은 화면을 그리는 데 42번을 부르게 된다.
+     ===================================================================== */
+  const WEEKDAYS = ["일", "월", "화", "수", "목", "금", "토"];
+
+  const gridEl      = document.getElementById("grid");
+  const listEl      = document.getElementById("list");
+  const monthLabel  = document.getElementById("month-label");
+  const sideDateEl  = document.getElementById("side-date");
+  const todayLabel  = document.getElementById("today-label");
+  const timeInput   = document.getElementById("new-time");
+  const titleInput  = document.getElementById("new-title");
+
+  /* ---------- 날짜 도우미 (mobile.html의 같은 이름 함수들과 규칙 동일) ---------- */
+  function atMidnight(d) { return new Date(d.getFullYear(), d.getMonth(), d.getDate()); }
+  function addDays(d, n) { const x = new Date(d); x.setDate(x.getDate() + n); return x; }
+  function fmtISO(d) {
+    return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0")
+         + "-" + String(d.getDate()).padStart(2, "0");
+  }
+  function isoToDate(iso) { const [y, m, d] = iso.split("-").map(Number); return new Date(y, m - 1, d); }
+  function fmtKor(d) { return (d.getMonth() + 1) + "월 " + d.getDate() + "일"; }
+
+  const TODAY = atMidnight(new Date());
+  const TODAY_ISO = fmtISO(TODAY);
+
+  let viewYear  = TODAY.getFullYear();   // 지금 보고 있는 달
+  let viewMonth = TODAY.getMonth();
+  let pickedISO = TODAY_ISO;             // 오른쪽 패널이 보여주는 날
+  let monthEvents = [];                  // 이 달에 걸친 일정 전부
+
+  /* ---------- 서버 호출 ---------- */
+
+  /** 지금 보고 있는 달이 걸쳐 있는 6주(=격자 42칸) 범위를 통째로 받아 온다. */
+  async function fetchMonth() {
+    const first = new Date(viewYear, viewMonth, 1);
+    const start = addDays(first, -first.getDay());          // 격자 첫 칸(일요일)
+    const end   = addDays(start, 41);                        // 격자 마지막 칸
+    try {
+      const res = await fetch("/api/calendar/events?from=" + fmtISO(start) + "&to=" + fmtISO(end));
+      monthEvents = (await res.json()).events || [];
+    } catch (e) {
+      monthEvents = [];
+      listEl.innerHTML = "";
+      const d = document.createElement("div");
+      d.className = "empty";
+      d.textContent = "일정을 불러오지 못했습니다. 서버 연결을 확인해 주세요.";
+      listEl.appendChild(d);
+    }
+  }
+
+  async function addEvent() {
+    const title = titleInput.value.trim();
+    if (!title) { titleInput.focus(); return; }
+    try {
+      await fetch("/api/calendar/events", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ date: pickedISO, title, time: timeInput.value || null }),
+      });
+      titleInput.value = ""; timeInput.value = "";
+    } catch (e) { /* 실패해도 아래 새로고침이 현재 상태를 그대로 보여준다 */ }
+    await refresh();
+  }
+
+  async function deleteEvent(id) {
+    try {
+      await fetch("/api/calendar/delete", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id }),
+      });
+    } catch (e) {}
+    await refresh();
+  }
+
+  /* ---------- 그리기 ---------- */
+
+  /** 날짜별로 묶어 둔다 — 42칸을 그릴 때 칸마다 전체 목록을 훑지 않도록. */
+  function groupByDate() {
+    const map = new Map();
+    for (const ev of monthEvents) {
+      if (!map.has(ev.date)) map.set(ev.date, []);
+      map.get(ev.date).push(ev);
+    }
+    return map;
+  }
+
+  /** 달력 격자 42칸(6주)을 그린다. 칸 수를 고정해야 달을 넘겨도 높이가 안 흔들린다. */
+  function renderGrid() {
+    const byDate = groupByDate();
+    const first = new Date(viewYear, viewMonth, 1);
+    const start = addDays(first, -first.getDay());
+
+    monthLabel.innerHTML = (viewMonth + 1) + "월<span class=\"yr\">" + viewYear + "</span>";
+    gridEl.innerHTML = "";
+
+    for (let i = 0; i < 42; i++) {
+      const date = addDays(start, i);
+      const iso = fmtISO(date);
+      const inMonth = date.getMonth() === viewMonth;
+
+      const cell = document.createElement("button");
+      cell.type = "button";
+      cell.className = "day"
+        + (inMonth ? "" : " out")
+        + (date.getDay() === 0 ? " sun" : "")
+        + (iso === TODAY_ISO ? " today" : "")
+        + (iso === pickedISO ? " picked" : "");
+
+      const num = document.createElement("div");
+      num.className = "d";
+      num.textContent = date.getDate();
+      cell.appendChild(num);
+
+      // 칸 안에는 두 건까지만 — 그 이상은 "+N"으로 접고 오른쪽 패널에서 본다.
+      const evs = byDate.get(iso) || [];
+      for (const ev of evs.slice(0, 2)) {
+        const line = document.createElement("div");
+        line.className = "ev";
+        if (ev.time) {
+          const t = document.createElement("span");
+          t.className = "t"; t.textContent = ev.time;
+          line.appendChild(t);
+        }
+        line.appendChild(document.createTextNode(ev.title));
+        cell.appendChild(line);
+      }
+      if (evs.length > 2) {
+        const more = document.createElement("div");
+        more.className = "more";
+        more.textContent = "+" + (evs.length - 2);
+        cell.appendChild(more);
+      }
+
+      // 옆 달 칸을 누르면 그 달로 넘어가면서 그 날을 고른다 — 달을 먼저 넘긴
+      // 뒤 다시 눌러야 하는 번거로움을 없앤다.
+      cell.addEventListener("click", () => {
+        pickedISO = iso;
+        if (!inMonth) {
+          viewYear = date.getFullYear(); viewMonth = date.getMonth();
+          refresh();                     // 다른 달이므로 그 달 일정을 다시 받아 온다
+        } else {
+          renderGrid(); renderSide();    // 같은 달이면 이미 받아 둔 것으로 다시 그린다
+        }
+      });
+      gridEl.appendChild(cell);
+    }
+  }
+
+  /** 오른쪽 패널: 고른 날의 일정 목록. */
+  function renderSide() {
+    const date = isoToDate(pickedISO);
+    const label = fmtKor(date) + ' <span class="wd">' + WEEKDAYS[date.getDay()] + "요일</span>";
+    sideDateEl.innerHTML = pickedISO === TODAY_ISO ? label + " · 오늘" : label;
+
+    const evs = monthEvents.filter(e => e.date === pickedISO);
+    listEl.innerHTML = "";
+
+    if (!evs.length) {
+      const d = document.createElement("div");
+      d.className = "empty";
+      d.textContent = "이 날은 비어 있습니다. 아래에서 일정을 추가하세요.";
+      listEl.appendChild(d);
+      return;
+    }
+
+    for (const ev of evs) {
+      const row = document.createElement("div");
+      row.className = "row";
+
+      const t = document.createElement("div");
+      t.className = "t" + (ev.time ? "" : " allday");
+      t.textContent = ev.time || "종일";
+
+      const txt = document.createElement("div");
+      txt.className = "txt";
+      txt.textContent = ev.title;
+
+      const del = document.createElement("button");
+      del.className = "del";
+      del.textContent = "✕";
+      del.title = "이 일정 삭제";
+      del.setAttribute("aria-label", ev.title + " 삭제");
+      del.addEventListener("click", () => deleteEvent(ev.id));
+
+      row.append(t, txt, del);
+      listEl.appendChild(row);
+    }
+  }
+
+  async function refresh() { await fetchMonth(); renderGrid(); renderSide(); }
+
+  /** 달을 넘긴다. 고른 날이 화면 밖으로 나가면 그 달 1일로 옮겨 준다. */
+  function moveMonth(delta) {
+    const m = new Date(viewYear, viewMonth + delta, 1);
+    viewYear = m.getFullYear(); viewMonth = m.getMonth();
+    const picked = isoToDate(pickedISO);
+    if (picked.getFullYear() !== viewYear || picked.getMonth() !== viewMonth) {
+      pickedISO = fmtISO(m);
+    }
+    refresh();
+  }
+
+  /* ---------- 이벤트 연결 ---------- */
+  document.getElementById("prev-btn").addEventListener("click", () => moveMonth(-1));
+  document.getElementById("next-btn").addEventListener("click", () => moveMonth(1));
+  document.getElementById("today-btn").addEventListener("click", () => {
+    viewYear = TODAY.getFullYear(); viewMonth = TODAY.getMonth();
+    pickedISO = TODAY_ISO;
+    refresh();
+  });
+  document.getElementById("add-btn").addEventListener("click", addEvent);
+  titleInput.addEventListener("keydown", ev => { if (ev.key === "Enter") addEvent(); });
+
+  // 키보드로도 달을 넘길 수 있게 — 팔에 달린 폰이 아니라 PC로 볼 때를 위한 것.
+  document.addEventListener("keydown", ev => {
+    if (ev.target === titleInput || ev.target === timeInput) return;
+    if (ev.key === "ArrowLeft") moveMonth(-1);
+    if (ev.key === "ArrowRight") moveMonth(1);
+  });
+
+  todayLabel.textContent = fmtISO(TODAY) + " " + WEEKDAYS[TODAY.getDay()];
+  refresh();
+</script>
+</body>
+</html>

@@ -109,3 +109,14 @@ class ScanAPI:
         except Exception as e:
             Logger.log("SCAN", f"parse failed: {e}")
             return jsonify({"error": str(e)}), 502
+
+    def register(self, app):
+        """이 객체가 담당하는 라우트를 Flask 앱에 붙인다.
+
+        GET  /api/scan/preview.jpg  preview (검출 결과를 그려 넣은 정지 화면)
+        GET  /api/scan/detect       detect  (문서 검출 + 스냅샷 고정)
+        POST /api/scan/parse        parse   {id, mode} 선택 문서 읽기
+        """
+        app.route("/api/scan/preview.jpg", endpoint="scan_preview")(self.preview)
+        app.route("/api/scan/detect", endpoint="scan_detect")(self.detect)
+        app.route("/api/scan/parse", methods=["POST"], endpoint="scan_parse")(self.parse)

@@ -1,0 +1,164 @@
+/* =====================================================================
+   desky — 공통 디자인 시스템 (모바일 화면과 일정 화면이 함께 쓴다)
+
+   두 페이지가 같은 파일 하나를 링크하므로, 색 하나만 여기서 바꾸면 앱 전체가
+   같이 바뀐다. 페이지 고유의 레이아웃 CSS만 각 템플릿 안에 남긴다.
+
+   색 규칙 — 무채색 골격 + 강조색 하나:
+     · 회색조(paper·ink·graphite)가 화면의 대부분을 차지한다.
+     · 인디고(signal) 하나만 "지금 살아 있는 것"에 쓴다 — 카메라 영상 면,
+       로봇이 하는 말, 오늘 날짜, 사용자가 방금 고른 것.
+     · 벽돌색(alert)은 되돌리기 어려운 동작(카메라 끄기)과 오류에만 쓴다.
+   강조색을 두 개로 제한해야 무채색 골격이 흐려지지 않는다. 새 색을 추가하기
+   전에 기존 둘 중 하나로 표현할 수 없는지 먼저 확인할 것.
+   ===================================================================== */
+
+@import url("https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.min.css");
+@import url("https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600&display=swap");
+
+:root {
+  /* --- 무채색 골격 ------------------------------------------------- */
+  --paper:      #EDEEF1;   /* 페이지 바탕 */
+  --panel:      #FFFFFF;   /* 밝은 패널 표면 */
+  --ink:        #121317;   /* 어두운 패널 + 밝은 면 위 본문 글자 */
+  --ink-2:      #1C1E24;   /* 잉크 위 한 단계 밝은 면 (입력창 등) */
+  --ink-3:      #282B32;   /* 잉크 위 두 단계 밝은 면 (카드 등) */
+  --bone:       #F1F2F5;   /* 잉크 위 글자 */
+  --graphite:   #363941;   /* 사용자가 누르는 것(주요 버튼) */
+  --graphite-dp:#25282E;   /* 눌린 상태 / 밝은 면 위 진한 글자 */
+  --dim:        #8A8F99;   /* 밝은 면 위 보조 글자 */
+  --dim-ink:    #767C87;   /* 잉크 위 보조 글자 */
+  --faint:      #B9BDC5;   /* 밝은 면 위 가장 흐린 글자(비활성·이번 달이 아닌 날짜) */
+  --line:       rgba(18, 19, 23, .12);   /* 밝은 면 위 경계선 */
+  --line-ink:   rgba(241, 242, 245, .14);/* 잉크 위 경계선 */
+
+  /* --- 강조색 1: 인디고 = 살아 있는 것 ------------------------------ */
+  --signal:     #4B45F0;
+  --signal-lt:  #6F6AF5;   /* 잉크 위에서 읽히는 밝은 인디고 */
+  --signal-dp:  #3A34C4;   /* 밝은 면 위 인디고 글자 */
+  --signal-ink: #14105C;   /* 인디고 면 위 글자 */
+  --signal-wash:rgba(75, 69, 240, .10);  /* 인디고 면의 아주 옅은 버전 */
+
+  /* --- 강조색 2: 벽돌 = 되돌리기 어려운 것 / 오류 -------------------- */
+  --alert:      #C0503F;
+  --alert-lt:   #FF9080;   /* 잉크 위 오류 글자 */
+  --alert-wash: rgba(192, 80, 63, .12);
+
+  /* --- 형태 -------------------------------------------------------- */
+  --r-panel: 18px;
+  --r-card:  12px;
+  --r-btn:   14px;
+  --gap:     12px;
+
+  /* --- 글꼴 -------------------------------------------------------- */
+  --sans: "Pretendard Variable", Pretendard, -apple-system, BlinkMacSystemFont, system-ui, Roboto, "Helvetica Neue", "Segoe UI", "Apple SD Gothic Neo", "Noto Sans KR", "Malgun Gothic", sans-serif;
+  --mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Monaco, Consolas, monospace;
+}
+
+* { box-sizing: border-box; }
+html, body { height: 100%; }
+body {
+  margin: 0;
+  font-family: var(--sans);
+  color: var(--ink);
+  background: var(--paper);
+  -webkit-font-smoothing: antialiased;
+  overscroll-behavior: none;
+}
+
+/* 모든 대문자 마이크로 라벨 — 두 화면이 공유하는 공통 어휘 */
+.tag {
+  font-family: var(--mono);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: .14em;
+  text-transform: uppercase;
+  color: var(--dim);
+}
+/* 숫자는 자릿수가 흔들리지 않게 고정폭으로 */
+.num { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+
+/* ---------- 칩 버튼: 화면 어디서나 같은 크기·같은 반응 ---------- */
+.chip {
+  appearance: none;
+  border: 1px solid var(--line);
+  background: transparent;
+  color: var(--ink);
+  font-family: var(--mono);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: .04em;
+  border-radius: 999px;
+  padding: 6px 11px;
+  cursor: pointer;
+  white-space: nowrap;
+  text-decoration: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  transition: background .12s ease, color .12s ease, border-color .12s ease;
+}
+.chip:active { transform: scale(.97); }
+.chip.on { background: var(--ink); color: var(--bone); border-color: var(--ink); }
+.chip.accent { background: var(--graphite); border-color: var(--graphite); color: #fff; }
+.chip.signal { background: var(--signal); border-color: var(--signal); color: #fff; }
+.chip.warn { color: var(--alert); border-color: rgba(192, 80, 63, .38); }
+.chip:disabled { opacity: .4; cursor: not-allowed; }
+
+/* 잉크 면 위에 놓인 칩 — 경계선과 글자색을 뒤집는다 */
+.on-ink .chip { border-color: var(--line-ink); color: var(--bone); }
+.on-ink .chip.accent { background: var(--bone); border-color: var(--bone); color: var(--ink); }
+.on-ink .chip.on { background: var(--signal); border-color: var(--signal); color: #fff; }
+.on-ink .chip.warn { color: var(--alert-lt); border-color: rgba(255, 144, 128, .35); }
+
+/* ---------- 큰 동작 버튼 ---------- */
+.big {
+  appearance: none;
+  border: 0;
+  border-radius: var(--r-panel);
+  background: var(--graphite);
+  color: #fff;
+  font-family: var(--sans);
+  font-size: clamp(13px, 1.5vw, 15px);
+  font-weight: 650;
+  letter-spacing: -.01em;
+  padding: 18px 14px;
+  min-height: 74px;
+  text-align: left;
+  cursor: pointer;
+  transition: transform .12s ease, filter .12s ease;
+  display: flex; flex-direction: column; justify-content: space-between;
+}
+.big small {
+  display: block;
+  font-family: var(--mono);
+  font-size: 9px;
+  letter-spacing: .12em;
+  text-transform: uppercase;
+  opacity: .66;
+  margin-bottom: 8px;
+}
+.big:active { transform: scale(.98); filter: brightness(1.15); }
+.big:disabled { background: #C3C6CC; color: #F1F2F5; cursor: not-allowed; }
+
+/* ---------- 입력 요소 ---------- */
+.field {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  color: var(--ink);
+  font-family: var(--sans);
+  font-size: 13px;
+  padding: 8px 10px;
+  height: 36px;
+  color-scheme: light;
+}
+.field::placeholder { color: var(--dim); }
+.field:focus { border-color: var(--signal); outline: none; }
+
+/* 어디서나 키보드 초점이 보이도록 */
+:focus-visible { outline: 2px solid var(--signal); outline-offset: 2px; }
+
+@media (prefers-reduced-motion: reduce) {
+  * { animation: none !important; transition: none !important; }
+}

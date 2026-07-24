@@ -1,561 +1,255 @@
-"""Flask control dashboard for the desky arm.
+"""desky 통합 앱 — 두 브랜치(팔 추적 / 웹 기능)를 하나로 조립하는 최상위 객체.
 
-Enter a target (x, y, z) position or a per-joint servo degree in the browser
-and drive the real actuators through hardware.util.ArmController. If no
-hardware is connected — no serial device, missing/misconfigured .env, or even
-the dynamixel_sdk/python-dotenv packages not installed — the dashboard still
-starts. It just reports "no hardware connected" instead of controlling
-anything.
+이 파일은 **조립만** 한다. 실제 일은 전부 아래 객체들이 나눠 가진다:
 
-Also serves /mobile: a page meant to be opened on the phone mounted on the
-arm's end-effector. It asks for camera+microphone permission and streams JPEG
-camera frames to the server over a WebSocket (/ws/camera). The main dashboard
-(/) polls the latest frame back over HTTP to preview it. The same WebSocket
-also carries recorded voice-question clips (WebM/Opus) from the mic button —
-the server tells the two apart by content (JPEG's SOI marker vs WebM's EBML
-header), transcribes voice clips via Gemini, and sends the transcript back
-over that same connection.
+    ArmService      팔 모델 + 하드웨어 + 관절각 캐시 + 안전 검사   (src/arm_service.py)
+    ArmRenderer     URDF 기하 파싱, 자세 → PNG                     (src/render.py)
+    ArmAPI          팔 제어 HTTP 라우트                            (src/api/arm.py)
+    Camera          /ws/camera 양방향 소켓(프레임·음성·랜드마크·명령) (src/api/camera.py)
+    Gemini          채팅/요약/STT/문서 읽기                        (src/api/gemini.py)
+    ScanAPI         문서 검출·선택·읽기 라우트                     (src/api/scan.py)
+    Calendar        일정 저장소 + 라우트                           (src/api/calendar.py)
+    Light           라즈베리파이 조명 스위치 프록시                (src/api/light.py)
+    GestureBridge   가위바위보 → 폰 명령/조명                      (src/gesture_bridge.py)
+    PerceptionLoop  카메라→인식→추종→미리보기 루프                 (src/perception_loop.py)
 
-Also exposes /api/ask: a Gemini-backed chat/summary endpoint, and the
-/api/scan/* routes (perception.document_scanner.DocumentScanner + Gemini) that
-back /mobile's document-scan section: detect paper documents in the latest
-camera frame, freeze a snapshot, and read the selected one aloud/verbatim. If
-GEMINI_API_KEY isn't set (or the google-genai package isn't installed), those
-routes report "not configured" instead of crashing the app, same as the
-hardware fallback.
+[병합 메모] 병합 전에는 두 브랜치 모두 이 자리에 500줄이 넘는 모듈 전역 스크립트를
+두고 있었다 — 전역 `app`, `arm_ctrl`, `gemini`, `camera` …와 `@app.route`가 붙은
+전역 함수들. 두 브랜치가 같은 전역과 같은 `run()` 함수를 각자 수정했기 때문에
+텍스트로는 도저히 합쳐지지 않았다. 그래서 각 기능을 객체로 떼어 낸 뒤, 이
+파일에는 "무엇을 만들어 어디에 연결하는가"만 남겼다. 그 결과 두 브랜치의 기능이
+서로의 코드를 건드리지 않고 나란히 존재한다:
 
-Face tracking (perception.face_tracker.FaceTracker/FaceFollower, mediapipe
-FaceMesh) runs server-side in run()'s local preview loop. Hand tracking does
-NOT — the phone runs its own MediaPipe Tasks Vision HandLandmarker
-(mobile.html) and sends only the landmarks over /ws/camera; the server
-(perception.hand_tracker.HandTracker) just turns those into world coordinates
-+ overlays (see its module docstring for why: a single computer doing
-mediapipe inference for both hands AND faces, plus the matplotlib 3D preview,
-plus hardware I/O, every frame, couldn't keep up with the phone's ~20fps —
-splitting hand detection onto the phone was the fix). Both trackers' outputs
-feed a single perception.follow_controller.FollowController, which decides
-what the arm should do next with face > hand > idle priority: a visible face
-is tracked (FaceFollower — yaw rotation to re-center sideways, height (z)
-moves to re-center up/down, see its docstring); with no face but a visible
-hand, the hand is tracked instead (HandFollower — screen-center offset
-re-centers sideways/up-down via translation, depth partially corrected); with
-neither visible, the arm returns to FollowController.IDLE_POSITION and then,
-once there, sweeps joint 1 (yaw) back and forth around that pose ("looking
-around") until a face or hand reappears. run() is the only place that
-actually commands hardware from FollowController's output (rate-limited via
-AppConst.COMMAND_MIN_INTERVAL_S — commanding a new goto on every ~20fps frame
-made the arm's motion look jittery) — none of face_tracker/hand_tracker/
-follow_controller has a hardware dependency themselves. The local preview
-windows (cv2 + matplotlib 3D scene) are throttled independently
-(AppConst.VIS_MIN_INTERVAL_S), since matplotlib's render cost was the main
-thing keeping this loop from following the phone's frame rate.
+  · 팔 추적 계열(얼굴/손 추종, 두리번거리기)  → PerceptionLoop + FollowController
+  · 웹 기능 계열(일정·조명·스캔·대화·제스처)  → 각 API 객체 + GestureBridge
+  · 둘의 유일한 접점                          → Camera(소켓)와 ArmService(팔 상태)
 
-Run from the repository root:
-    python -m webapp.app
+두 계열이 공유하는 자원은 이 둘뿐이고, 둘 다 스레드 안전하게 감싸져 있다.
+
+페이지는 셋이다: `/`(PC 대시보드), `/mobile`(팔에 달린 폰), `/calendar`(일정).
+
+실행:
+    python main.py            (권장)
+    python -m src.app         (같은 동작)
+그다음 브라우저에서 https://localhost:8000, 팔에 달린 폰에서는
+https://<이 PC의 LAN IP>:8000/mobile 을 연다.
 """
 
-import numpy as np
 import threading
-import cv2
-import io
-import time
 
-import matplotlib
-matplotlib.use("Agg")  # headless: render arm previews to PNG, no display/window
-from matplotlib.figure import Figure
-from matplotlib.backends.backend_agg import FigureCanvasAgg
-
-from flask import Flask, Response, jsonify, render_template, request
+from flask import Flask, render_template
 from flask_sock import Sock
 
-from kinematics.urdf_loader import load_arm, _DEFAULT_URDF_PATH
-from kinematics.simulate import parse_urdf, draw_pose, workspace_bounds
 from fundamental.const import AppConst
 from fundamental.logger import Logger
 from perception.document_scanner import DocumentScanner
-from perception.face_tracker import FaceTracker
-from perception.follow_controller import FollowController
-from perception.hand_tracker import HandTracker
+from src.api.arm import ArmAPI
+from src.api.calendar import Calendar
 from src.api.camera import Camera
 from src.api.gemini import Gemini
+from src.api.light import Light
 from src.api.scan import ScanAPI
+from src.arm_service import ArmService
+from src.gesture_bridge import GestureBridge
+from src.perception_loop import PerceptionLoop
+from src.render import ArmRenderer
 
 try:
-    # Optional: only needed to read GEMINI_API_KEY (and hardware's .env vars)
-    # from a .env file. Without it, those must already be real env vars.
+    # 선택 의존성: .env에서 GEMINI_API_KEY(와 하드웨어의 DEVICE_NAME)를 읽을
+    # 때만 필요하다. 없으면 진짜 환경변수로 이미 설정돼 있어야 한다.
     from dotenv import load_dotenv
 
     load_dotenv()
 except ImportError:
     pass
 
-Logger.enabled = True
 
-app = Flask(__name__)
-sock = Sock(app)
+class DeskyApp:
+    """Flask 앱과 모든 기능 객체를 조립해 들고 있는 최상위 객체."""
 
-arm_ctrl = None
-hardware_error = None
-try:
-    # Imported inside the try block: hardware.controller imports dynamixel_sdk
-    # at module load time, so even that missing package must count as "no
-    # hardware connected" rather than crashing the whole app.
-    from hardware.controller import Controller
-    from hardware.actuator import Actuator, ArmController
+    def __init__(self, show_preview=True, gestures_enabled=True):
+        """서비스들을 만들고 라우트를 붙인다(서버는 아직 안 띄운다).
 
-    controller = Controller()
-    actuators = [Actuator(id=i, model="AX-18A", controller=controller) for i in range(1, 6)]
-    arm_ctrl = ArmController(actuators)
-    Logger.log("WEBAPP", "Hardware connected")
-except Exception as e:
-    hardware_error = str(e)
-    Logger.log("WEBAPP", f"No hardware connected: {hardware_error}")
+        show_preview     : 로컬 cv2 미리보기 창을 띄울지(헤드리스 서버면 False).
+        gestures_enabled : 가위바위보 제스처를 켤지.
+        """
+        self.flask = Flask(__name__)
+        self.sock = Sock(self.flask)
 
-# Joint list is needed to render the per-joint controls even with no hardware.
-arm = arm_ctrl.arm if arm_ctrl is not None else load_arm()
+        self._build_services(gestures_enabled)
+        self._register_routes()
+        self.loop = PerceptionLoop(
+            arm_service=self.arm_service,
+            camera=self.camera,
+            renderer=self.renderer,
+            gesture_bridge=self.gesture_bridge,
+            show_preview=show_preview,
+        )
 
-# Geometry for the server-side 3D preview (/api/render) and the local 3D scene
-# window in run(). Parsed once; the workspace bounds keep the preview's framing
-# stable across poses.
-_root_link, _chain, _visuals = parse_urdf(_DEFAULT_URDF_PATH)
-_render_bounds = workspace_bounds(arm, _root_link, _chain, _visuals)
+    # ------------------------------------------------------------------
+    # 조립
+    # ------------------------------------------------------------------
+    def _build_services(self, gestures_enabled):
+        """기능 객체들을 만들어 서로 연결한다.
+
+        생성 순서가 곧 의존 방향이다: 하드웨어/팔 → 렌더러 → Gemini → 카메라
+        → 스캔 → 일정/조명 → 제스처. 어느 것도 전역을 읽지 않고 필요한 것을
+        생성자로 받으므로, 나중에 하나만 가짜로 바꿔 끼우기 쉽다.
+        """
+        # 팔 — 하드웨어가 없어도 모델만으로 계속 동작한다.
+        self.arm_service = ArmService()
+        self.renderer = ArmRenderer(self.arm_service.arm)
+
+        # AI — GEMINI_API_KEY가 없으면 configured=False로 남고, 관련 기능만 빠진다.
+        self.gemini = Gemini()
+
+        # 폰과의 양방향 소켓(프레임·음성·손 랜드마크 ↔ transcript·제스처 명령).
+        self.camera = Camera(self.gemini)
+
+        # 문서 스캔 = 검출(OpenCV) + 읽기(Gemini).
+        self.scanner = DocumentScanner()
+        self.scan_api = ScanAPI(self.camera, self.scanner, self.gemini)
+
+        # 웹 기능 계열.
+        self.calendar = Calendar()
+        self.light = Light()
+
+        # 제스처 — 카메라 소켓으로 폰에 명령을 보내고, 조명도 함께 끈다.
+        self.gesture_bridge = GestureBridge(self.camera, self.light,
+                                            enabled=gestures_enabled)
+
+        # 팔 제어 HTTP 라우트.
+        self.arm_api = ArmAPI(self.arm_service, self.renderer)
+
+    def _register_routes(self):
+        """페이지 두 개와 각 기능 객체의 라우트를 등록한다.
+
+        기능별 라우트는 각 객체의 `register()`가 스스로 붙인다 — 어떤 경로가
+        어떤 함수인지는 그 객체 옆에 적혀 있는 편이 찾기 쉽고, 새 기능을
+        추가할 때 이 파일을 고칠 필요도 없다.
+        """
+        self.flask.route("/")(self.index)
+        self.flask.route("/mobile")(self.mobile)
+        self.flask.route("/calendar", endpoint="calendar_page")(self.calendar_page)
+
+        self.arm_api.register(self.flask)
+        self.gemini.register(self.flask)
+        self.camera.register(self.flask, self.sock)
+        self.scan_api.register(self.flask)
+        self.calendar.register(self.flask)
+        self.light.register(self.flask)
+
+    # ------------------------------------------------------------------
+    # 페이지
+    # ------------------------------------------------------------------
+    def index(self):
+        """GET / — PC용 제어 대시보드(관절 슬라이더, 3D 미리보기, 카메라 화면)."""
+        arm = self.arm_service.arm
+        return render_template(
+            "index.html",
+            joint_ids=[joint.id for joint in arm.joints],
+            joint_ranges={joint.id: self.arm_service.joint_slider_range(joint)
+                          for joint in arm.joints},
+            coupled_joints={joint.id: joint.coupled_with for joint in arm.joints
+                            if joint.coupled_with is not None},
+            hardware_connected=self.arm_service.connected,
+            hardware_error=self.arm_service.hardware_error,
+        )
+
+    def mobile(self):
+        """GET /mobile — 팔에 장착한 휴대폰에서 여는 페이지.
+
+        카메라/마이크 권한을 받아 프레임·음성·손 랜드마크를 소켓으로 보내고,
+        서버가 되돌려 주는 transcript와 제스처 명령을 실행한다. 일정·조명·문서
+        스캔 UI도 이 페이지에 있다.
+        """
+        arm = self.arm_service.arm
+        return render_template(
+            "mobile.html",
+            joint_ids=[joint.id for joint in arm.joints],
+            hardware_connected=self.arm_service.connected,
+            hardware_error=self.arm_service.hardware_error,
+            gemini_configured=self.gemini.configured,
+            gemini_error=self.gemini.error,
+        )
+
+    def calendar_page(self):
+        """GET /calendar — 한 달 달력이 화면 전체를 쓰는 일정 화면.
+
+        /mobile의 모달이 아니라 **별도 페이지**인 이유: 좁은 폰 화면에서 달력과
+        카메라 영상을 같이 놓으면 둘 다 작아지기만 한다. 대신 이 화면으로
+        넘어가면 /mobile이 내려가면서 카메라·웹소켓 세션도 끊기고, 뒤로가기로
+        돌아오면 자동으로 다시 켜진다(mobile.html 9번 섹션).
+
+        데이터는 서버가 미리 넣어 주지 않는다 — 페이지가 열린 뒤 자기 시계로
+        '이번 달'을 정하고 `/api/calendar/events?from=&to=`로 직접 받아 온다.
+        서버와 폰의 시간대가 다를 때 '오늘'이 어긋나지 않게 하려는 것으로,
+        음성 명령이 날짜를 해석하는 규칙과 같다.
+        """
+        return render_template("calendar.html")
+
+    # ------------------------------------------------------------------
+    # 실행
+    # ------------------------------------------------------------------
+    def initialize_position(self):
+        """시작할 때 팔을 정해진 자세로 보내고 싶으면 여기에 적는다.
+
+        기본은 아무것도 하지 않는다 — 전원을 켠 순간 팔이 갑자기 움직이면
+        위험하고, 무엇보다 하드웨어가 없을 때도 이 경로를 지나야 하기 때문.
+        예: self.arm_service.goto_position((0.0, 0.0, 0.34))
+        """
+
+    def start_server(self):
+        """Flask 개발 서버를 백그라운드 스레드에서 띄운다.
+
+        debug=False     : 리로더가 이 모듈을 자식 프로세스에서 다시 import하면
+                          시리얼 포트를 두 번 열게 된다.
+        threaded=True   : /ws/camera 소켓이 세션 내내 열려 있으므로, 그 동안에도
+                          대시보드의 HTTP 폴링을 받으려면 요청마다 스레드가 필요.
+        ssl_context     : getUserMedia는 보안 컨텍스트에서만 동작한다. 폰이 LAN
+                          IP로 접속하려면 HTTPS가 필요해 자체 서명 인증서를
+                          즉석에서 만든다(브라우저가 한 번 경고를 띄운다).
+
+        `app.run()`은 영원히 블로킹하므로 반드시 별도 스레드여야 한다 — 메인
+        스레드는 cv2 창(미리보기 루프)이 써야 하기 때문(macOS 제약).
+        """
+        thread = threading.Thread(
+            target=lambda: self.flask.run(
+                host=AppConst.SERVER_HOST,
+                port=AppConst.SERVER_PORT,
+                debug=False,
+                threaded=True,
+                ssl_context=AppConst.SSL_CONTEXT,
+            ),
+            daemon=True,
+        )
+        thread.start()
+        Logger.log("APP", f"Serving on https://{AppConst.SERVER_HOST}:{AppConst.SERVER_PORT}")
+        return thread
+
+    def run(self):
+        """서버를 띄우고, 메인 스레드에서 인식 루프를 돈다(여기서 블로킹된다)."""
+        self.start_server()
+        self.initialize_position()
+        self.loop.run_forever()
 
 
-_Q_CACHE_TTL = AppConst.Q_CACHE_TTL_S  # seconds
-_q_cache = {"q": None, "t": 0.0}
+# ----------------------------------------------------------------------
+# 모듈 수준 진입점 (main.py / `python -m src.app` 공용)
+# ----------------------------------------------------------------------
+def create_app(**kwargs) -> DeskyApp:
+    """`DeskyApp`을 만들어 돌려준다.
 
-# Max width (px) of the copy of each camera frame fed to mediapipe in run()'s
-# preview loop — see the comment at its one call site for why.
-_MEDIAPIPE_MAX_WIDTH = AppConst.MEDIAPIPE_MAX_WIDTH
-
-
-def _current_q():
-    """Current joint angles (radians), throttled to _Q_CACHE_TTL.
-
-    Both the /api/status poll and the run() 3D-scene overlay (which redraws on
-    every mobile camera frame, ~5/s) need the current pose, but each actuator
-    readback is its own DYNAMIXEL serial round trip x5 joints. Without this
-    shared cache the two call sites would independently re-read all 5
-    actuators far more often than the arm's pose actually changes, flooding
-    the serial bus. TTL is a few seconds (not sub-second) on purpose: the 3D
-    overlay and HandFollower's "which way am I currently facing" direction
-    don't need fresher-than-that pose data, and every cache miss is 5 blocking
-    serial round trips, so a short TTL was making this the hot path. Returns
-    None if there's no hardware, or the very first read fails (a later
-    failure just keeps serving the stale cached pose).
+    앱 생성이 import 시점이 아니라 호출 시점에 일어나는 게 중요하다 — 생성자가
+    시리얼 포트를 열려고 시도하므로, 이 모듈을 단순히 import했다는 이유만으로
+    하드웨어를 잡으면 안 된다(테스트·도구에서 import만 하는 경우가 있다).
     """
-    if arm_ctrl is None:
-        return None
-    now = time.monotonic()
-    if _q_cache["q"] is not None and now - _q_cache["t"] < _Q_CACHE_TTL:
-        return _q_cache["q"]
-    servo_degs = [a.get_position() for a in arm_ctrl.actuators]
-    # Bump the timestamp on this attempt regardless of outcome. A failed read
-    # used to leave "t" at its last SUCCESS, so a stretch of comm errors made
-    # every subsequent call see a "stale" cache and retry immediately — a hot
-    # loop of 5-actuator serial reads on every call (run()'s loop calls this
-    # once per processed camera frame) instead of backing off to the same
-    # _Q_CACHE_TTL cadence a healthy read gets.
-    _q_cache["t"] = now
-    if any(d is None for d in servo_degs):
-        return _q_cache["q"]
-    _q_cache["q"] = arm.servo_deg_to_q(servo_degs)
-    return _q_cache["q"]
+    return DeskyApp(**kwargs)
 
 
-gemini = Gemini()
-camera = Camera(gemini)
-scanner = DocumentScanner()
-scan_api = ScanAPI(camera, scanner, gemini)
-
-
-@app.route("/")
-def index():
-    return render_template(
-        "index.html",
-        joint_ids=[joint.id for joint in arm.joints],
-        joint_ranges={joint.id: _joint_slider_range(joint) for joint in arm.joints},
-        coupled_joints={joint.id: joint.coupled_with for joint in arm.joints
-                        if joint.coupled_with is not None},
-        hardware_connected=arm_ctrl is not None,
-        hardware_error=hardware_error,
-    )
-
-@app.route("/mobile")
-def mobile():
-    return render_template(
-        "mobile.html",
-        joint_ids=[joint.id for joint in arm.joints],
-        hardware_connected=arm_ctrl is not None,
-        hardware_error=hardware_error,
-        gemini_configured=gemini.configured,
-        gemini_error=gemini.error,
-    )
-
-@app.route("/api/status")
-def status():
-    if arm_ctrl is None:
-        return jsonify({"connected": False, "position": None, "error": hardware_error})
-    q = _current_q()
-    return jsonify({"connected": True, "position": list(arm.fk(q)) if q is not None else None})
-
-
-app.route("/api/ask", methods=["POST"], endpoint="ask")(gemini.ask)
-sock.route("/ws/camera")(camera.ws_camera)
-app.route("/api/camera/latest.jpg", endpoint="camera_latest_frame")(camera.latest_frame)
-app.route("/api/camera/status", endpoint="camera_status")(camera.status)
-app.route("/api/scan/preview.jpg", endpoint="scan_preview")(scan_api.preview)
-app.route("/api/scan/detect", endpoint="scan_detect")(scan_api.detect)
-app.route("/api/scan/parse", methods=["POST"], endpoint="scan_parse")(scan_api.parse)
-
-
-@app.route("/api/goto_position", methods=["POST"])
-def goto_position():
-    if arm_ctrl is None:
-        return jsonify({"error": "no hardware connected"}), 503
-
-    data = request.get_json(force=True)
-    try:
-        target = (float(data["x"]), float(data["y"]), float(data["z"]))
-    except (KeyError, TypeError, ValueError):
-        return jsonify({"error": "x, y, z must be numbers"}), 400
-
-    Logger.log("WEBAPP", f"goto_position request: target={target}")
-    q, converged = arm_ctrl.goto_position(target)
-    servo_deg = arm_ctrl.arm.q_to_servo_deg(q) if converged else None
-    return jsonify({"converged": converged, "servo_deg": servo_deg})
-
-
-def _parse_degrees(data):
-    """Validate a request body carrying one servo degree per joint (in joint
-    order). Returns (degrees, error_response). Exactly one is non-None."""
-    degs = data.get("degrees") if data else None
-    if not isinstance(degs, list) or len(degs) != len(arm.joints):
-        return None, (jsonify({"error": f"degrees must be a list of {len(arm.joints)} numbers"}), 400)
-    try:
-        return [float(d) for d in degs], None
-    except (TypeError, ValueError):
-        return None, (jsonify({"error": "degrees must be numbers"}), 400)
-
-
-def _joint_slider_range(joint):
-    """(min_deg, max_deg, home_deg) for this joint's UI slider, derived from
-    its URDF <limit> (kinematics/find_joint_limits.py — self-collision-aware,
-    not just the servo's 0-300 deg physical range). For a coupled joint
-    (currently just joint2, see Joint.coupled_table) this is the
-    conservative bound that holds no matter what its partner joint is doing;
-    _servo_degs_within_limits does the live, coupling-aware check server-side
-    before anything actually moves."""
-    lo_deg, hi_deg = sorted((joint.servo_deg(joint.q_min), joint.servo_deg(joint.q_max)))
-    return lo_deg, hi_deg, joint.home_deg
-
-
-def _servo_degs_within_limits(servo_degs):
-    """Check servo_degs (one per joint, arm.joints order) against each
-    joint's self-collision-aware bounds, resolving joint2's coupling to
-    joint3 using the angles in this SAME servo_degs vector (not whatever the
-    arm is currently doing) — the values that would actually be commanded
-    together. Returns None if all are within range, else a message naming
-    the first joint that isn't."""
-    q = arm.servo_deg_to_q(servo_degs)
-    for i, joint in enumerate(arm.joints):
-        q_other = q[arm.id_to_index[joint.coupled_with]] if joint.coupled_with is not None else None
-        lo, hi = joint.bounds(q_other=q_other)
-        if lo - 1e-9 <= q[i] <= hi + 1e-9:
-            continue
-        lo_deg, hi_deg = sorted((joint.servo_deg(lo), joint.servo_deg(hi)))
-        coupling_note = f" (depends on joint{joint.coupled_with}'s current angle)" \
-            if joint.coupled_with is not None else ""
-        return (f"joint{joint.id} servo={servo_degs[i]:.1f} deg is outside its "
-                f"self-collision-safe range [{lo_deg:.1f}, {hi_deg:.1f}] deg{coupling_note}")
-    return None
-
-
-@app.route("/api/fk", methods=["POST"])
-def fk():
-    """Forward kinematics only — compute the end-effector position for a set of
-    servo angles WITHOUT moving anything. Works even with no hardware, so the
-    dashboard can preview an FK pose before committing to it."""
-    degs, err = _parse_degrees(request.get_json(force=True))
-    if err:
-        return err
-    q = arm.servo_deg_to_q(degs)
-    return jsonify({
-        "position": list(arm.fk(q)),
-        "within_limits": _servo_degs_within_limits(degs) is None,
-    })
-
-
-@app.route("/api/render", methods=["POST"])
-def render():
-    """Render the arm at the given servo angles to a PNG (server-side matplotlib,
-    same drawing code as the desktop simulation). Powers the web 3D preview and
-    needs no hardware."""
-    degs, err = _parse_degrees(request.get_json(force=True))
-    if err:
-        return err
-    q = arm.servo_deg_to_q(degs)
-
-    fig = Figure(figsize=(6, 6))
-    FigureCanvasAgg(fig)
-    ax = fig.add_subplot(111, projection="3d", computed_zorder=False)
-    ax.view_init(elev=22, azim=-55)
-    draw_pose(ax, arm, _root_link, _chain, _visuals, q, _render_bounds)
-
-    buf = io.BytesIO()
-    fig.savefig(buf, format="png", dpi=90)
-    return Response(buf.getvalue(), mimetype="image/png")
-
-
-@app.route("/api/ik", methods=["POST"])
-def ik():
-    """Solve IK for a target (x, y, z) and return the per-joint servo degrees.
-    Does NOT move anything — the web sim uses it to preview a solution. `seed`
-    (optional) is the current servo degrees, used as the IK starting guess."""
-    data = request.get_json(force=True)
-    try:
-        target = (float(data["x"]), float(data["y"]), float(data["z"]))
-    except (KeyError, TypeError, ValueError):
-        return jsonify({"error": "x, y, z must be numbers"}), 400
-
-    seed = None
-    raw_seed = data.get("seed") if data else None
-    if isinstance(raw_seed, list) and len(raw_seed) == len(arm.joints):
-        try:
-            seed = arm.servo_deg_to_q([float(d) for d in raw_seed])
-        except (TypeError, ValueError):
-            seed = None
-
-    q, converged = arm.ik(target, seed=seed)
-    return jsonify({"converged": converged, "servo_deg": arm.q_to_servo_deg(q)})
-
-
-@app.route("/api/goto_joints", methods=["POST"])
-def goto_joints():
-    """FK control of ALL actuators at once: set every joint's servo angle and
-    drive all five servos, then report the resulting FK position."""
-    if arm_ctrl is None:
-        return jsonify({"error": "no hardware connected"}), 503
-
-    degs, err = _parse_degrees(request.get_json(force=True))
-    if err:
-        return err
-
-    limit_error = _servo_degs_within_limits(degs)
-    if limit_error:
-        return jsonify({"error": limit_error}), 400
-
-    Logger.log("WEBAPP", f"goto_joints request: degrees={degs}")
-    try:
-        pos = arm_ctrl.goto_joints(degs)
-    except ValueError as e:  # e.g. a servo degree outside 0..300
-        return jsonify({"error": str(e)}), 400
-    return jsonify({"position": list(pos)})
-
-
-@app.route("/api/goto_joint", methods=["POST"])
-def goto_joint():
-    if arm_ctrl is None:
-        return jsonify({"error": "no hardware connected"}), 503
-
-    data = request.get_json(force=True)
-    try:
-        joint_id = int(data["id"])
-        degree = float(data["degree"])
-    except (KeyError, TypeError, ValueError):
-        return jsonify({"error": "id and degree must be numbers"}), 400
-
-    actuator = next((a for a in arm_ctrl.actuators if a.id == joint_id), None)
-    if actuator is None:
-        return jsonify({"error": f"no actuator with id {joint_id}"}), 404
-    if joint_id not in arm.id_to_index:
-        return jsonify({"error": f"no joint with id {joint_id}"}), 404
-
-    # This joint moves alone, but a coupled joint's (e.g. joint2's) safe range
-    # depends on where every OTHER joint currently is — so check against the
-    # rest of the arm's live pose (or home, if it isn't known yet) with just
-    # this one joint's degree swapped in.
-    current_q = _current_q() or [0.0] * len(arm.joints)
-    servo_degs = arm.q_to_servo_deg(current_q)
-    servo_degs[arm.id_to_index[joint_id]] = degree
-    limit_error = _servo_degs_within_limits(servo_degs)
-    if limit_error:
-        return jsonify({"error": limit_error}), 400
-
-    Logger.log("WEBAPP", f"goto_joint request: id={joint_id} degree={degree}")
-    try:
-        actuator.goto(degree)
-    except ValueError as e:
-        return jsonify({"error": str(e)}), 400
-    return jsonify({"ok": True})
-
-
-def initialize_position():
-    # arm_ctrl.goto_position([0,0,0.3])
-    # arm_ctrl.actuators[0].goto(180)
-    # arm_ctrl.actuators[1].goto(180)
-    pass
-
-
-def run():
-    """Serve the dashboard and show a local preview window of the phone's
-    camera feed. Shared by `python -m webapp.app` and `python main.py` so
-    both behave identically.
-
-    debug=False: the Flask reloader re-imports this module in a subprocess,
-    which would open the serial port twice.
-    threaded=True: the /ws/camera WebSocket connection stays open for the
-    whole mobile session, so the dev server needs a thread per request to
-    keep serving the dashboard's HTTP polling at the same time.
-    ssl_context="adhoc": getUserMedia (camera/mic) only works in a secure
-    context. A phone loading /mobile over the LAN IP needs HTTPS — a
-    self-signed cert is generated on the fly (pyOpenSSL). The browser will
-    show an untrusted-certificate warning once; accept it to proceed.
-
-    app.run() blocks forever, so it runs on a background thread here —
-    otherwise the cv2.imshow loop below would never execute. cv2's window
-    calls stay on the main thread since OpenCV's HighGUI requires that on
-    macOS (imshow/waitKey from a non-main thread silently do nothing there).
-    """
-    server_thread = threading.Thread(
-        target=lambda: app.run(host="0.0.0.0", port=8000, debug=False, threaded=True, ssl_context="adhoc"),
-        daemon=True,
-    )
-    server_thread.start()
-
-    Logger.log("CAMERA", "Press 'q' in the camera window (or Ctrl+C here) to quit")
-    last_frame_count = 0
-    last_vis_time = 0.0
-    last_command_time = 0.0
-
-    initialize_position()
-
-    # perception.hand_tracker.HandTracker no longer runs mediapipe itself —
-    # hand detection happens on the phone (mobile.html's MediaPipe Tasks
-    # Vision HandLandmarker); this object just turns the landmarks it sends
-    # (via camera.latest_hand_landmarks()) into world coordinates + overlays.
-    tracker = HandTracker()
-
-    # perception.face_tracker.FaceTracker — mediapipe FaceMesh still runs
-    # server-side (see module docstrings in perception.hand_tracker/app.py's
-    # own docstring for why only hands moved to the phone). Same
-    # partial-failure pattern: if mediapipe isn't installed, `available` is
-    # False and process()/draw_overlay() are no-ops.
-    face_tracker = FaceTracker(max_num_faces=1, min_detection_confidence=0.5, min_tracking_confidence=0.5)
-
-    # perception.follow_controller.FollowController owns the face > hand >
-    # idle priority and the idle/look-around state machine (see its
-    # docstring); it wraps a FaceFollower/HandFollower pair internally.
-    follow_controller = FollowController(arm)
-
-    # Persistent 3D scene (robot + hand/face overlay), rendered off-screen
-    # (Agg, same as /api/render) and shown via cv2 so it doesn't fight the
-    # module's Agg backend or need a second GUI event loop on the main thread.
-    fig3d = Figure(figsize=(6, 6))
-    canvas3d = FigureCanvasAgg(fig3d)
-    ax3d = fig3d.add_subplot(111, projection="3d", computed_zorder=False)
-    ax3d.view_init(elev=22, azim=-55)
-
-    try:
-        while True:
-            frame_bytes, frame_count = camera.snapshot()
-            # Only decode+show on a genuinely new frame — the phone only
-            # sends ~5 fps, but this loop spins far faster (waitKey(1) is a
-            # ~1ms cap, not a guarantee), so without this check it would
-            # needlessly re-decode and re-display the same bytes every spin.
-            if frame_bytes is not None and frame_count != last_frame_count:
-                last_frame_count = frame_count
-                # /mobile now corrects orientation itself (screen.orientation
-                # angle) before sending, so the frame arrives already upright —
-                # no server-side rotate needed here anymore.
-                frame = cv2.imdecode(np.frombuffer(frame_bytes, np.uint8), cv2.IMREAD_COLOR)
-
-                q = _current_q() or [0.0] * len(arm.joints)
-                T_ee = arm.fk_matrix(q)
-                rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-
-                # mediapipe's cost scales with pixel count, and the phone can
-                # arrive at a high enough resolution that face detection alone
-                # can't keep up with its ~20fps — so detection runs on a
-                # downscaled copy. Landmarks are normalized (0..1), so
-                # accuracy is unaffected as long as the resize preserves
-                # aspect ratio; frame.shape (the ORIGINAL size) is still what's
-                # passed to process() below, since estimate_depth's pinhole
-                # math is calibrated against the real camera's field of view,
-                # not the detection copy's size.
-                proc_height, proc_width = rgb.shape[:2]
-                if proc_width > _MEDIAPIPE_MAX_WIDTH:
-                    scale = _MEDIAPIPE_MAX_WIDTH / proc_width
-                    rgb_proc = cv2.resize(
-                        rgb, (int(proc_width * scale), int(proc_height * scale)),
-                        interpolation=cv2.INTER_AREA)
-                else:
-                    rgb_proc = rgb
-
-                faces = face_tracker.process(rgb_proc, T_ee, frame.shape)
-
-                # Hands: no server-side detection anymore — the phone already
-                # ran MediaPipe Tasks Vision on this same frame and sent the
-                # landmarks over /ws/camera (see perception.hand_tracker's
-                # module docstring). This is just coordinate math, not model
-                # inference, so there's no reason to skip it even when a face
-                # was found (unlike the old mediapipe-Hands version).
-                raw_hands = camera.latest_hand_landmarks()
-                hands = tracker.process_landmarks(raw_hands, T_ee, frame.shape) if raw_hands else []
-
-                now = time.monotonic()
-
-                if arm_ctrl is not None:
-                    # FollowController decides WHERE, WHEN, and HOW (face vs.
-                    # hand vs. idle/look-around, full 3D reposition vs.
-                    # yaw-only) — see its docstring. Evaluated every frame so
-                    # its internal state (idle/returning/looking-around) stays
-                    # current, but the actual hardware write is throttled
-                    # below — issuing a new goto on every ~20fps frame made
-                    # the arm restart its motion constantly and look jittery.
-                    command = follow_controller.next_command(faces, hands, T_ee, q)
-                    if command is not None and now - last_command_time >= AppConst.COMMAND_MIN_INTERVAL_S:
-                        last_command_time = now
-                        kind, payload = command
-                        if kind == "position":
-                            arm_ctrl.goto_position(payload)
-                        elif kind == "joints":
-                            arm_ctrl.goto_joints(payload)
-
-                # Local preview windows (cv2 camera view + matplotlib 3D
-                # scene) are a debug aid, not something the robot's behavior
-                # depends on — and matplotlib's 3D render is far more
-                # expensive than the detection above, so redrawing it on
-                # every processed frame was the main reason this loop
-                # couldn't keep up with the phone's ~20fps. Throttled
-                # independently of the decision logic above.
-                if now - last_vis_time >= AppConst.VIS_MIN_INTERVAL_S:
-                    last_vis_time = now
-                    face_tracker.draw_overlay(frame, faces)
-                    tracker.draw_overlay(frame, hands)
-                    if frame is not None:
-                        cv2.imshow("Mobile camera", frame)
-
-                    # 3D scene: current robot pose plus any detected hand(s)/
-                    # face, placed relative to the end-effector (the phone/
-                    # camera mount) via forward kinematics.
-                    draw_pose(ax3d, arm, _root_link, _chain, _visuals, q, _render_bounds)
-                    tracker.draw_forward_axis_debug(ax3d, T_ee, _render_bounds[3] * 0.25)
-                    tracker.draw_hands_3d(ax3d, hands)
-                    face_tracker.draw_faces_3d(ax3d, faces)
-                    canvas3d.draw()
-                    scene = cv2.cvtColor(np.asarray(canvas3d.buffer_rgba()), cv2.COLOR_RGBA2BGR)
-                    cv2.imshow("3D scene (robot + hand/face)", scene)
-            # waitKey both drives HighGUI's event loop (without it the window
-            # never actually renders/refreshes) and lets 'q'/Esc quit.
-            key = cv2.waitKey(1) & 0xFF
-            if key == ord("q") or key == 27:
-                break
-    except KeyboardInterrupt:
-        pass
-    finally:
-        cv2.destroyAllWindows()
-        face_tracker.close()
+def run(**kwargs):
+    """앱을 만들고 실행한다 — main.py가 부르는 함수."""
+    create_app(**kwargs).run()
 
 
 if __name__ == "__main__":
