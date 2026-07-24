@@ -38,7 +38,7 @@ import math
 
 from kinematics.urdf_loader import load_arm
 from fundamental.const import BodyFollowerConst, BodyTrackerConst, CameraGeometryConst
-from perception.camera_geometry import Landmark, camera_frame, clamp_xy, to_landmark
+from perception.camera_geometry import Landmark, camera_frame, clamp_xy, to_landmark, to_pixel
 
 # 몸 중심으로 쓰는 이름 — 랜드마크 자체는 2개뿐이지만(양쪽 어깨), 어느 게
 # 어느 건지 헷갈리지 않도록 이름으로 접근한다(휴대폰이 보내는 JSON도 같은
@@ -149,11 +149,13 @@ class BodyTracker:
         for body in bodies:
             left = body.landmarks[_LEFT_SHOULDER]
             right = body.landmarks[_RIGHT_SHOULDER]
-            lx, ly = int(left.x * w), int(left.y * h)
-            rx, ry = int(right.x * w), int(right.y * h)
-            cx, cy = (lx + rx) // 2, (ly + ry) // 2
-            cv2.line(frame_bgr, (lx, ly), (rx, ry), (0, 200, 0), 2)
-            cv2.circle(frame_bgr, (cx, cy), 5, (0, 200, 0), -1)
+            left_pt = to_pixel(left, w, h)     # 안전 변환 — camera_geometry 참고
+            right_pt = to_pixel(right, w, h)
+            if left_pt and right_pt:
+                cv2.line(frame_bgr, left_pt, right_pt, (0, 200, 0), 2)
+                center = ((left_pt[0] + right_pt[0]) // 2,
+                          (left_pt[1] + right_pt[1]) // 2)
+                cv2.circle(frame_bgr, center, 5, (0, 200, 0), -1)
         return frame_bgr
 
     def draw_bodies_3d(self, ax, bodies):

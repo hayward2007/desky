@@ -10,6 +10,7 @@
     ScanAPI         라이브 프레임을 Gemini로 읽는 스캔 라우트       (src/api/scan.py)
     Calendar        일정 저장소 + 라우트                           (src/api/calendar.py)
     Light           라즈베리파이 조명 스위치 프록시                (src/api/light.py)
+    Relay           인터넷 중계로 파이에 명령 전달                  (src/api/relay.py)
     GestureBridge   가위바위보 → 폰 명령/조명                      (src/gesture_bridge.py)
     PerceptionLoop  카메라→인식→추종→미리보기 루프                 (src/perception_loop.py)
 
@@ -37,30 +38,27 @@ https://<이 PC의 LAN IP>:8000/mobile 을 연다.
 
 import threading
 
-from flask import Flask, render_template
+from flask import Flask, jsonify, render_template
 from flask_sock import Sock
 
 from fundamental.const import AppConst
 from fundamental.logger import Logger
+from fundamental.network import server_urls, startup_banner
 from src.api.arm import ArmAPI
 from src.api.calendar import Calendar
 from src.api.camera import Camera
 from src.api.gemini import Gemini
 from src.api.light import Light
+from src.api.relay import Relay
 from src.api.scan import ScanAPI
 from src.arm_service import ArmService
 from src.gesture_bridge import GestureBridge
 from src.perception_loop import PerceptionLoop
 from src.render import ArmRenderer
 
-try:
-    # 선택 의존성: .env에서 GEMINI_API_KEY(와 하드웨어의 DEVICE_NAME)를 읽을
-    # 때만 필요하다. 없으면 진짜 환경변수로 이미 설정돼 있어야 한다.
-    from dotenv import load_dotenv
-
-    load_dotenv()
-except ImportError:
-    pass
+# .env 로딩은 fundamental/const.py가 맡는다 — 그 파일의 클래스들이 import
+# 시점에 환경변수를 읽으므로, 그보다 먼저 로드되어야 하기 때문이다(이유는
+# 해당 파일 상단 주석 참고). 여기서 다시 부르면 순서상 늦어 의미가 없다.
 
 
 class DeskyApp:
@@ -110,7 +108,10 @@ class DeskyApp:
 
         # 웹 기능 계열.
         self.calendar = Calendar()
-        self.light = Light()
+        # 조명: 중계 주제가 설정돼 있으면 인터넷 중계로(파이가 어느 망에 있든
+        # 동작), 아니면 PI_URL로 직접 호출한다(같은 공유기 전용).
+        self.relay = Relay()
+        self.light = Light(self.relay)
 
         # 제스처 — 카메라 소켓으로 폰에 명령을 보내고, 조명도 함께 끈다.
         self.gesture_bridge = GestureBridge(self.camera, self.light,
@@ -129,6 +130,7 @@ class DeskyApp:
         self.flask.route("/")(self.index)
         self.flask.route("/mobile")(self.mobile)
         self.flask.route("/calendar", endpoint="calendar_page")(self.calendar_page)
+        self.flask.route("/api/network", endpoint="network_info")(self.network_info)
 
         self.arm_api.register(self.flask)
         self.gemini.register(self.flask)
@@ -171,6 +173,20 @@ class DeskyApp:
             gemini_error=self.gemini.error,
         )
 
+    def network_info(self):
+        """GET /api/network — 폰에서 접속할 주소 목록.
+
+        대시보드가 이 값을 읽어 화면에 크게 띄운다. 콘솔 배너를 못 본 채로
+        브라우저만 열어 둔 경우(또는 서버를 다른 사람이 켠 경우)에도 주소를
+        찾을 수 있어야 하기 때문이다.
+        """
+        urls = server_urls(AppConst.SERVER_PORT)
+        return jsonify({
+            "urls": urls,
+            "mobile_url": f"{urls[0]}/mobile" if urls else None,
+            "port": AppConst.SERVER_PORT,
+        })
+
     def calendar_page(self):
         """GET /calendar — 한 달 달력이 화면 전체를 쓰는 일정 화면.
 
@@ -204,6 +220,10 @@ class DeskyApp:
                           시리얼 포트를 두 번 열게 된다.
         threaded=True   : /ws/camera 소켓이 세션 내내 열려 있으므로, 그 동안에도
                           대시보드의 HTTP 폴링을 받으려면 요청마다 스레드가 필요.
+        host=0.0.0.0    : 특정 랜카드가 아니라 **모든** 랜카드에서 받는다. 같은
+                          공유기의 폰·태블릿이 접속할 수 있는 건 이 설정 덕분이다
+                          (기본값 127.0.0.1이면 이 PC 안에서만 열린다). 실제로
+                          입력해야 할 주소는 아래 배너가 찾아서 알려준다.
         ssl_context     : getUserMedia는 보안 컨텍스트에서만 동작한다. 폰이 LAN
                           IP로 접속하려면 HTTPS가 필요해 자체 서명 인증서를
                           즉석에서 만든다(브라우저가 한 번 경고를 띄운다).
@@ -222,7 +242,11 @@ class DeskyApp:
             daemon=True,
         )
         thread.start()
-        Logger.log("APP", f"Serving on https://{AppConst.SERVER_HOST}:{AppConst.SERVER_PORT}")
+        # 0.0.0.0은 "모든 랜카드에서 받겠다"는 뜻이라 같은 공유기의 다른 기기도
+        # 이미 접속할 수 있다. 다만 그 주소를 사람이 모르는 게 문제였다 —
+        # 0.0.0.0은 주소창에 입력할 수 있는 값이 아니고 localhost는 폰 자신을
+        # 가리킨다. 그래서 이 PC의 실제 공유기 내부 주소를 찾아 그대로 띄운다.
+        print(startup_banner(AppConst.SERVER_PORT))
         return thread
 
     def run(self):

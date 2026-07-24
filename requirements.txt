@@ -22,4 +22,8 @@ google-genai          # src.api.gemini: 채팅/요약/STT/문서 글자 읽기
 # --- 라즈베리파이(조명)에서만 필요 --------------------------------------
 # raspberry-server/server.py는 파이에서 따로 실행한다. 파이에 설치:
 #   sudo apt install -y python3-flask
-#   pigpio(파이 4 이하) 또는 python3-lgpio(파이 5)
+#   sudo apt install -y python3-lgpio       # GPIO (파이 5·4 공통)
+#   인터넷 중계(다른 망에서 조명 제어)에는 추가 설치가 필요 없다 —
+#   파이썬 표준 라이브러리(urllib)만 쓴다.
+#       pigpio는 파이 5에서 동작하지 않고 최근 OS에는 패키지도 없다
+#       ("no installation candidate"). 스크립트가 자동으로 lgpio를 쓴다.

@@ -6,10 +6,20 @@ http://<파이>:5000 으로 fetch하면 브라우저가 혼합 콘텐츠(mixed c
 차단한다 — Chrome에서는 사용자가 허용할 방법조차 없고 조용히 실패한다.
 페이지를 HTTP로 내리는 것도 답이 아니다(getUserMedia가 보안 컨텍스트를 요구).
 
-그래서 폰은 이 서버를 부르고, 이 서버가 파이를 부른다. 서버 간 통신은
-브라우저를 거치지 않으므로 혼합 콘텐츠도 CORS도 적용되지 않는다.
+그래서 폰은 이 서버를 부르고, 이 서버가 파이에 명령을 전달한다. 서버 간
+통신은 브라우저를 거치지 않으므로 혼합 콘텐츠도 CORS도 적용되지 않는다.
 
-    폰 --HTTPS--> 메인 서버 --HTTP--> 파이 --PWM--> 서보
+파이에 전달하는 경로는 둘뿐이고, 설정에 따라 자동으로 갈린다.
+
+  ① 인터넷 중계 — 서로 다른 망에 있어도 된다
+        PC 서버 ──(나가는 HTTP)──▶ 중계소 ◀──(나가는 HTTP)── 파이 ──▶ 서보
+     양쪽 다 바깥으로 나가 만나므로 포트포워딩도, 터널도, 서로의 IP도 필요
+     없다. `DESKY_RELAY_TOPIC`을 양쪽에 같은 값으로 넣으면 이 경로를 쓴다.
+     자세한 내용은 src/api/relay.py 참고.
+
+  ② 직접 호출 — 같은 공유기에 있을 때
+        폰 --HTTPS--> PC 서버 --HTTP--> 파이(192.168.x.x) --PWM--> 서보
+     중계 주제를 설정하지 않았을 때의 기본 동작. `PI_URL`만 맞으면 된다.
 """
 
 import threading
@@ -37,16 +47,41 @@ class Light:
     HOLD_MS = LightConst.HOLD_MS
     TIMEOUT_S = LightConst.TIMEOUT_S
 
-    def __init__(self):
+    def __init__(self, relay=None):
+        """relay: src.api.relay.Relay (설정돼 있지 않으면 ② 직접 호출만 쓴다)."""
         self.state = None          # "on" | "off" | None(모름)
+        self.relay = relay
         self.lock = threading.Lock()
 
-    def _post(self, angle):
-        url = f"{self.PI_URL}/api/press"
-        payload = {"angle": angle, "rest": self.REST_ANGLE, "hold_ms": self.HOLD_MS}
-        response = requests.post(url, json=payload, timeout=self.TIMEOUT_S)
-        response.raise_for_status()
-        return response.json()
+    def _payload(self, angle):
+        """두 경로가 똑같이 쓰는 명령 내용 — 눌렀다 되돌아오는 동작 한 번."""
+        return {"angle": angle, "rest": self.REST_ANGLE, "hold_ms": self.HOLD_MS}
+
+    def _press(self, angle):
+        """파이에 '눌러라'를 전달한다. (성공여부, 에러메시지) 반환.
+
+        파이가 서버에 접속해 있으면 그 연결로 보내고(①), 아니면 예전처럼
+        PI_URL로 직접 HTTP를 쏜다(②). 둘 다 결과 형태가 같아서 호출부는
+        어느 경로였는지 몰라도 된다.
+        """
+        if self.relay is not None and self.relay.enabled:
+            return self.relay.press(angle, self.REST_ANGLE, self.HOLD_MS)
+
+        try:
+            response = requests.post(f"{self.PI_URL}/api/press",
+                                     json=self._payload(angle), timeout=self.TIMEOUT_S)
+            response.raise_for_status()
+            return True, None
+        except requests.exceptions.Timeout:
+            return False, f"파이 응답 없음 ({self.PI_URL})"
+        except requests.exceptions.ConnectionError:
+            # 가장 흔한 실패다 — 서버와 파이가 다른 망에 있는 경우.
+            # 역방향 연결(①)을 쓰라는 힌트를 에러에 함께 담는다.
+            return False, (f"파이에 연결 실패 ({self.PI_URL}). 파이가 다른 공유기에 "
+                           f"있다면 양쪽에 DESKY_RELAY_TOPIC을 같은 값으로 넣어 "
+                           f"인터넷 중계를 쓰세요")
+        except Exception as e:
+            return False, f"파이 오류: {e}"
 
     def set(self, state):
         """조명을 켜거나 끈다. (성공여부, 에러메시지)를 돌려준다."""
@@ -59,14 +94,9 @@ class Light:
         # 서보가 누르고 되돌아오는 동안(~0.6초) 파이 서버가 응답을 잡고 있으므로,
         # 그 사이 두 번째 요청이 겹치지 않도록 잠근다.
         with self.lock:
-            try:
-                self._post(angle)
-            except requests.exceptions.Timeout:
-                return False, f"파이 응답 없음 ({self.PI_URL})"
-            except requests.exceptions.ConnectionError:
-                return False, f"파이에 연결 실패 ({self.PI_URL})"
-            except Exception as e:
-                return False, f"파이 오류: {e}"
+            ok, error = self._press(angle)
+            if not ok:
+                return False, error
             self.state = state
         Logger.log("LIGHT", f"→ {state} ({angle:.0f}deg)")
         return True, None
@@ -94,7 +124,14 @@ class Light:
     def status(self):
         """GET /api/light/status — 서보는 위치를 되읽을 수 없으므로 이 값은
         '서버가 마지막으로 명령한 상태'다. 손으로 스위치를 누르면 어긋난다."""
-        return jsonify({"state": self.state, "pi_url": self.PI_URL})
+        via_relay = self.relay is not None and self.relay.enabled
+        return jsonify({
+            "state": self.state,
+            # 지금 어느 경로로 나가는지 + 파이가 살아 있는지 — 시연 전 점검용.
+            "route": "relay" if via_relay else "http",
+            "pi_alive": self.relay.pi_alive if via_relay else None,
+            "pi_url": None if via_relay else self.PI_URL,
+        })
 
     def register(self, app):
         """이 객체가 담당하는 라우트를 Flask 앱에 붙인다.

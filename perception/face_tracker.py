@@ -40,7 +40,7 @@ import math
 
 from kinematics.urdf_loader import load_arm
 from fundamental.const import CameraGeometryConst, FaceTrackerConst, FaceFollowerConst
-from perception.camera_geometry import camera_frame, clamp_xy, to_landmark
+from perception.camera_geometry import camera_frame, clamp_xy, to_landmark, to_pixel
 
 # 얼굴 중심으로 쓰는 이름 — 랜드마크 자체는 3개뿐이지만(코끝, 양쪽 눈 바깥쪽
 # 끝), 어느 게 어느 건지 헷갈리지 않도록 이름으로 접근한다(휴대폰이 보내는
@@ -152,11 +152,15 @@ class FaceTracker:
             c = face.landmarks[_CENTER]
             left = face.landmarks[_LEFT_EYE_OUTER]
             right = face.landmarks[_RIGHT_EYE_OUTER]
-            cx, cy = int(c.x * w), int(c.y * h)
-            lx, ly = int(left.x * w), int(left.y * h)
-            rx, ry = int(right.x * w), int(right.y * h)
-            cv2.line(frame_bgr, (lx, ly), (rx, ry), (255, 120, 0), 2)
-            cv2.circle(frame_bgr, (cx, cy), 5, (255, 120, 0), -1)
+            # to_pixel을 거치는 이유는 그 함수 docstring 참고 — 인식이 순간적으로
+            # 엉뚱한 값을 뱉으면 OpenCV가 좌표 변환에 실패하며 예외를 던진다.
+            center = to_pixel(c, w, h)
+            left_pt = to_pixel(left, w, h)
+            right_pt = to_pixel(right, w, h)
+            if left_pt and right_pt:
+                cv2.line(frame_bgr, left_pt, right_pt, (255, 120, 0), 2)
+            if center:
+                cv2.circle(frame_bgr, center, 5, (255, 120, 0), -1)
         return frame_bgr
 
     def draw_faces_3d(self, ax, faces):

@@ -32,6 +32,7 @@ from fundamental.const import CameraGeometryConst, HandTrackerConst, HandFollowe
 from perception.camera_geometry import camera_frame as _camera_frame
 from perception.camera_geometry import clamp_xy as _clamp_xy
 from perception.camera_geometry import to_landmark as _to_landmark
+from perception.camera_geometry import to_pixel
 
 # 표준 MediaPipe 21점 손 골격 연결 — 예전에는 mediapipe 라이브러리가 이미
 # 만들어 둔 `mp.solutions.hands.HAND_CONNECTIONS`를 그대로 썼지만, 서버가
@@ -184,15 +185,20 @@ class HandTracker:
 
         h, w = frame_bgr.shape[0], frame_bgr.shape[1]
         for hand in hands:
-            coords = [(int(lm.x * w), int(lm.y * h)) for lm in hand.landmarks]
+            # 안전 변환 — 그릴 수 없는 점은 None이 되고 아래에서 건너뛴다
+            # (이유는 camera_geometry.to_pixel docstring 참고).
+            coords = [to_pixel(lm, w, h) for lm in hand.landmarks]
             for i, j in HAND_CONNECTIONS:
-                cv2.line(frame_bgr, coords[i], coords[j], (0, 200, 0), 2)
-            for x, y in coords:
-                cv2.circle(frame_bgr, (x, y), 3, (0, 0, 255), -1)
+                if coords[i] and coords[j]:
+                    cv2.line(frame_bgr, coords[i], coords[j], (0, 200, 0), 2)
+            for point in coords:
+                if point:
+                    cv2.circle(frame_bgr, point, 3, (0, 0, 255), -1)
 
             palm_coords = [coords[i] for i in self.PALM_QUAD]
             for a, b in zip(palm_coords, palm_coords[1:] + palm_coords[:1]):
-                cv2.line(frame_bgr, a, b, (0, 255, 0), 2)
+                if a and b:
+                    cv2.line(frame_bgr, a, b, (0, 255, 0), 2)
         return frame_bgr
 
     def draw_forward_axis_debug(self, ax, T_ee, length):
