@@ -198,6 +198,27 @@ class Camera:
         with self.lock:
             return self.frame, self.frame_count
 
+    def connected(self) -> bool:
+        """Whether a phone is attached to /ws/camera *and* its on-device
+        MediaPipe pipeline has actually started reporting landmarks (hand,
+        face, or body — whichever loaded first).
+
+        Used by `PerceptionLoop`/`FollowController` to hold the idle
+        look-around sway off until there's really something to react to.
+        The raw socket alone isn't a good enough signal: getUserMedia/the
+        websocket can be up and streaming JPEG frames for several seconds
+        before mobile.html's Hand/Face/PoseLandmarker finish loading (model
+        download + WASM init), during which every collect_*() call returns
+        an empty list — gating on the socket alone would still let the arm
+        start swaying in that gap, before recognition has ever run once.
+        """
+        with self.lock:
+            return self.clients > 0 and (
+                self.hand_landmarks is not None
+                or self.face_landmarks is not None
+                or self.body_landmarks is not None
+            )
+
     def latest_hand_landmarks(self):
         """Thread-safe read of the latest phone-reported hand landmarks for
         run()'s preview loop. Returns None until the first message arrives;

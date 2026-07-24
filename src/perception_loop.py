@@ -61,7 +61,7 @@ import time
 import cv2
 import numpy as np
 
-from fundamental.const import AppConst
+from fundamental.const import AppConst, FollowControllerConst
 from fundamental.logger import Logger
 from perception.body_tracker import BodyTracker
 from perception.face_tracker import FaceTracker
@@ -107,6 +107,30 @@ class PerceptionLoop:
         self._last_frame_count = 0
         self._last_command_time = 0.0
         self._last_vis_time = 0.0
+
+        # 카메라 연결과 무관하게 켜자마자 IDLE_POSITION으로 보낸다 — 이
+        # 이동을 next_command()(카메라 프레임이 와야 도는)에만 맡기면, 폰이
+        # 아직 한 번도 안 붙었을 때 팔이 이전 세션의 자세 그대로 계속
+        # 가만히 있게 된다. FollowController의 STARTUP_IDLE_S(생성 직후
+        # 몇 초간 무슨 대상이 보여도 무시하는 것)와는 별개 — 그건 "카메라가
+        # 붙은 뒤에도 곧장 추적을 시작하지 않는다"는 뜻이고, 이건 "카메라가
+        # 붙기 전에도 최소한 idle 자세로는 보내 둔다"는 뜻이다.
+        self._move_to_idle_on_startup()
+
+    def _move_to_idle_on_startup(self):
+        """전원을 켜자마자 팔을 IDLE_POSITION으로 이동시킨다(하드웨어가
+        있을 때만). 시리얼 오류 하나로 앱 시작이 막히면 안 되므로
+        HardwareUnavailable을 포함해 실패는 조용히 무시한다 — 이후
+        정상적인 인식/추종 루프가 시작되면 어차피 같은 자리로 복귀를
+        다시 시도한다."""
+        if not self.arm_service.connected:
+            return
+        try:
+            self.arm_service.execute(("position", FollowControllerConst.IDLE_POSITION))
+        except HardwareUnavailable:
+            pass
+        except Exception as e:
+            Logger.log("LOOP", f"startup idle move failed: {e}")
 
     # ------------------------------------------------------------------
     # 메인 루프
@@ -155,7 +179,7 @@ class PerceptionLoop:
         hands = self.collect_hands(T_ee, frame.shape)
 
         now = time.monotonic()
-        self.drive_arm(faces, hands, bodies, T_ee, q, now)
+        self.drive_arm(faces, hands, bodies, T_ee, q, now, self.camera.connected())
         gesture = self.update_gestures(hands, frame.shape)
         self.update_preview(frame, faces, hands, bodies, gesture, q, T_ee, now)
 
@@ -203,15 +227,17 @@ class PerceptionLoop:
     # ------------------------------------------------------------------
     # 판단 → 동작
     # ------------------------------------------------------------------
-    def drive_arm(self, faces, hands, bodies, T_ee, q, now):
+    def drive_arm(self, faces, hands, bodies, T_ee, q, now, camera_connected):
         """추종 상태 머신을 갱신하고, 간격이 되면 실제 하드웨어 명령을 낸다.
 
         판단(`next_command`)은 **매 프레임** 부른다 — 상태 머신 내부의
         추종/복귀/두리번거리기 상태가 최신이어야 하기 때문. 하지만 실제 명령은
         COMMAND_MIN_INTERVAL_S 간격으로만 보낸다: 20fps로 새 목표를 계속 주면
-        팔이 매번 움직임을 새로 시작해 덜덜거린다.
+        팔이 매번 움직임을 새로 시작해 덜덜거린다. camera_connected는
+        `FollowController`가 idle 중 두리번거리기로 넘어갈지 판단하는 데
+        쓴다(perception.follow_controller 모듈 docstring 참고).
         """
-        command = self.follow_controller.next_command(faces, hands, bodies, T_ee, q)
+        command = self.follow_controller.next_command(faces, hands, bodies, T_ee, q, camera_connected)
         if command is None or not self.arm_service.connected:
             return
         if now - self._last_command_time < self.COMMAND_MIN_INTERVAL_S:

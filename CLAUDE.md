@@ -389,6 +389,61 @@ mediapipe로 처리했지만(손 → 얼굴 → 몸 순으로 옮겨갔다), 두
 포함)까지 `FaceFollower`와 완전히 같은 알고리즘을 쓴다(값은
 `fundamental.const.BodyFollowerConst`로 독립적으로 튜닝 가능).
 
+**얼굴을 잃을 때는 디바운스를 더 길게 준다** — 위 `TARGET_SWITCH_TIMEOUT_S`(0.5초)는
+모든 전환에 공통으로 쓰이는데, 얼굴 인식은 고개를 살짝 돌리거나 눈을 깜빡이는
+정도로도 한두 프레임 끊기는 일이 흔해서 이 값만으로는 몸(어깨)으로 너무 쉽게
+넘어가 버렸다. 그래서 지금 얼굴을 추적 중일 때만(`_active_target == "face"`) 다른
+대상으로 전환하는 판정에 `FollowControllerConst.FACE_LOST_GRACE_S`(기본 1.5초)를
+대신 쓴다(`_update_active_target()`) — 몸→얼굴을 포함한 다른 전환은 그대로
+`TARGET_SWITCH_TIMEOUT_S`를 쓴다.
+
+**몸을 추적하며 멈춰 있으면 한 번 살짝 들어 올려 얼굴을 다시 찾아본다** — 몸(어깨)
+추적 중 화면 오프셋이 데드존 안이라 팔이 `FollowControllerConst.FACE_REACQUIRE_STILL_S`
+(기본 2초) 동안 계속 가만히 있었고, 거리가 `FACE_BODY_SWITCH_DISTANCE_M`보다
+가까우면(멀면 애초에 얼굴을 잡을 가능성이 낮으니 시도하지 않는다) 팔을
+`FACE_REACQUIRE_HEIGHT_STEP_M`만큼 한 번 들어 올린다(`FollowController._body_track_command()`)
+— 어깨 중심으로 카메라를 맞추면 각도상 얼굴이 화면 위쪽 경계 밖에 걸쳐 있을 수
+있는데, 조금만 올려도 다시 잡히는 경우가 많다. 들어 올린 뒤에는
+`FACE_REACQUIRE_SUPPRESS_S` 동안 `BodyFollower`의 보정 명령을 무시하고 그 자세를
+유지하며 얼굴이 다시 잡히길 기다린다(안 그러면 BodyFollower가 몸 기준으로 즉시
+다시 낮춰버려서 들어 올린 의미가 없어진다). 이 몸 추적 세션 동안은 한 번만
+시도한다 — 계속 실패해도 무한정 위로 계속 들리지 않도록. 대상이 바뀌면
+(`FollowController._enter_target()`) 이 상태는 전부 리셋되어 다음에 몸을 추적하게
+되면 다시 한 번 시도할 수 있다.
+
+**켠 직후 카메라 연결과 무관하게 곧장 IDLE_POSITION으로 이동한다** —
+`PerceptionLoop.__init__()`의 `_move_to_idle_on_startup()`이 하드웨어가 연결돼
+있으면 그 자리에서 바로 `arm_service.execute(("position", IDLE_POSITION))`를
+호출한다. 이게 필요한 이유: 그 외 모든 이동은 `FollowController.next_command()`를
+거치는데, 이 함수는 카메라 프레임이 들어와야(`process_frame()`) 호출되므로 폰이
+아직 한 번도 연결되지 않았으면 팔이 이전 세션의 자세 그대로 계속 가만히 있게 된다
+— 즉 "켰을 때 idle 자세로 가 있어라"라는 요구는 카메라 연결에 의존하면 안 된다.
+하드웨어가 없거나 이동이 실패해도(`HardwareUnavailable` 등) 조용히 넘어간다 —
+시리얼 오류 하나로 앱 시작이 막히면 안 되기 때문.
+
+**켠 직후 `STARTUP_IDLE_S`(기본 3초) 동안은 무조건 idle을 유지한다** —
+위와는 별개로, `FollowController`가 생성된 시점부터 이 시간 동안은 얼굴/몸/손이
+보여도 전부 무시한다(`next_command()` 맨 앞에서 처리, `_pick_target`/디바운스
+로직 자체를 타지 않는다). 카메라가 연결된 뒤에도 곧장 추적을 시작하지 않고
+한 박자 쉬게 하는 용도다 — 전원 인가 직후 사람이 이미 카메라 앞에 있으면 그
+순간 곧바로 팔이 홱 움직이는 걸 막기 위함. 이 시간이 지나면 그 시점에 보이는
+대상으로 디바운스 없이 바로 추적을 시작한다(idle에서 뭔가 나타났을 때의 기존
+규칙과 동일).
+
+**폰의 인식 파이프라인이 실제로 돌기 시작하기 전에는 두리번거리기로 넘어가지
+않는다** — `next_command()`가 받는 `camera_connected` 인자(호출부
+`PerceptionLoop.process_frame()`이 `Camera.connected()`로 넘겨준다)가 False면
+`_idle_step()`은 IDLE_POSITION까지만 복귀하고 그 자세를 가만히 유지할 뿐 좌우로
+흔드는 룩어라운드는 시작하지 않는다. 단순히 "웹소켓이 붙어 있는지"만 보면 안 되는
+이유가 있다 — `getUserMedia`/웹소켓은 붙어서 JPEG 프레임을 계속 보내고 있어도
+`mobile.html`의 Hand/Face/PoseLandmarker는 모델 다운로드+WASM 초기화 때문에 그보다
+몇 초 늦게 준비되는 경우가 흔한데, 그 동안은 `collect_faces()`/`collect_bodies()`/
+`collect_hands()`가 전부 빈 목록을 돌려주므로 소켓 연결만 봤다면 인식이 단 한 번도
+돌기 전에 두리번거리기가 시작돼 버렸을 것이다. 그래서 `Camera.connected()`는
+소켓이 붙어 있을 뿐 아니라 손/얼굴/몸 랜드마크 중 하나라도 최초 메시지를 받은
+적이 있어야 True다. 두리번거리는 중에 연결이 끊기면(폰 새로고침 등) 그 자리에서
+멈추고 다시 대기 상태로 돌아간다.
+
 `PerceptionLoop.process_frame()`의 결정 루프(인식 → `FollowController.next_command()` →
 `ArmService.execute()`)는 프레임이 들어올 때마다(최대 ~20fps) 돌지만, 로컬 미리보기 창
 (cv2 + matplotlib 3D 씬, `PerceptionLoop.update_preview()`)은 그보다 훨씬 비싸서
